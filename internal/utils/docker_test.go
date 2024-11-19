@@ -9,13 +9,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/h2non/gock"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase/cli/internal/testing/apitest"
-	"gopkg.in/h2non/gock.v1"
 )
 
 const (
@@ -133,7 +134,7 @@ func TestRunOnce(t *testing.T) {
 		gock.New(Docker.DaemonHost()).
 			Post("/v" + Docker.ClientVersion() + "/networks/create").
 			Reply(http.StatusCreated).
-			JSON(types.NetworkCreateResponse{})
+			JSON(network.CreateResponse{})
 		gock.New(Docker.DaemonHost()).
 			Post("/v" + Docker.ClientVersion() + "/containers/create").
 			Reply(http.StatusServiceUnavailable)
@@ -155,7 +156,7 @@ func TestRunOnce(t *testing.T) {
 		gock.New(Docker.DaemonHost()).
 			Post("/v" + Docker.ClientVersion() + "/networks/create").
 			Reply(http.StatusCreated).
-			JSON(types.NetworkCreateResponse{})
+			JSON(network.CreateResponse{})
 		gock.New(Docker.DaemonHost()).
 			Post("/v" + Docker.ClientVersion() + "/containers/create").
 			Reply(http.StatusOK).

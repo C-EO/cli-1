@@ -36,16 +36,14 @@ var (
 			}
 			return link.Run(ctx, flags.ProjectRef, fsys)
 		},
-		PostRunE: func(cmd *cobra.Command, args []string) error {
-			return link.PostRun(flags.ProjectRef, os.Stdout, afero.NewOsFs())
-		},
 	}
 )
 
 func init() {
 	linkFlags := linkCmd.Flags()
 	linkFlags.StringVar(&flags.ProjectRef, "project-ref", "", "Project ref of the Supabase project.")
-	linkFlags.StringP("password", "p", "", "Password to your remote Postgres database.")
+	linkFlags.StringVarP(&dbPassword, "password", "p", "", "Password to your remote Postgres database.")
+	// For some reason, BindPFlag only works for StringVarP instead of StringP
 	cobra.CheckErr(viper.BindPFlag("DB_PASSWORD", linkFlags.Lookup("password")))
 	rootCmd.AddCommand(linkCmd)
 }

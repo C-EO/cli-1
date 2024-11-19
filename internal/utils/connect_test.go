@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/go-errors/errors"
+	"github.com/h2non/gock"
 	"github.com/jackc/pgconn"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase/cli/internal/testing/apitest"
-	"github.com/supabase/cli/internal/testing/pgtest"
-	"gopkg.in/h2non/gock.v1"
+	"github.com/supabase/cli/internal/utils/cloudflare"
+	"github.com/supabase/cli/pkg/pgtest"
 )
 
 var dbConfig = pgconn.Config{
@@ -29,7 +30,7 @@ const (
 	PG15_POOLER_URL = "postgres://postgres.zupyfdrjfhbeevcogohz:[YOUR-PASSWORD]@fly-0-sin.pooler.supabase.com:6543/postgres"
 )
 
-func TestConnectRemotePostgres(t *testing.T) {
+func TestConnectByConfig(t *testing.T) {
 	t.Run("connects to remote postgres with DoH", func(t *testing.T) {
 		Config.Db.Pooler.ConnectionString = ""
 		DNSResolver.Value = DNS_OVER_HTTPS
@@ -41,22 +42,22 @@ func TestConnectRemotePostgres(t *testing.T) {
 			MatchParam("name", dbConfig.Host).
 			MatchHeader("accept", "application/dns-json").
 			Reply(http.StatusOK).
-			JSON(&dnsResponse{Answer: []dnsAnswer{
-				{Type: dnsIPv4Type, Data: "127.0.0.1"},
+			JSON(&cloudflare.DNSResponse{Answer: []cloudflare.DNSAnswer{
+				{Type: cloudflare.TypeA, Data: "127.0.0.1"},
 			}})
 		gock.New("https://1.1.1.1").
 			Get("/dns-query").
 			MatchParam("name", dbConfig.Host).
 			MatchHeader("accept", "application/dns-json").
 			Reply(http.StatusOK).
-			JSON(&dnsResponse{Answer: []dnsAnswer{
-				{Type: dnsIPv4Type, Data: "127.0.0.1"},
+			JSON(&cloudflare.DNSResponse{Answer: []cloudflare.DNSAnswer{
+				{Type: cloudflare.TypeA, Data: "127.0.0.1"},
 			}})
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
 		// Run test
-		c, err := ConnectRemotePostgres(context.Background(), dbConfig, conn.Intercept)
+		c, err := ConnectByConfig(context.Background(), dbConfig, conn.Intercept)
 		require.NoError(t, err)
 		defer c.Close(context.Background())
 		assert.NoError(t, err)
@@ -71,7 +72,7 @@ func TestConnectRemotePostgres(t *testing.T) {
 		config := *dbConfig.Copy()
 		config.Host = "localhost"
 		config.Password = "pass word"
-		c, err := ConnectRemotePostgres(context.Background(), config, conn.Intercept)
+		c, err := ConnectByConfig(context.Background(), config, conn.Intercept)
 		require.NoError(t, err)
 		defer c.Close(context.Background())
 		assert.Equal(t, config.Password, c.Config().Password)
@@ -84,7 +85,7 @@ func TestConnectRemotePostgres(t *testing.T) {
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
 		// Run test
-		c, err := ConnectRemotePostgres(context.Background(), dbConfig, conn.Intercept)
+		c, err := ConnectByConfig(context.Background(), dbConfig, conn.Intercept)
 		// Check error
 		require.NoError(t, err)
 		defer c.Close(context.Background())
@@ -108,7 +109,7 @@ func TestConnectRemotePostgres(t *testing.T) {
 			MatchHeader("accept", "application/dns-json").
 			ReplyError(&net.OpError{Op: "dial", Err: netErr})
 		// Run test
-		_, err := ConnectRemotePostgres(context.Background(), dbConfig)
+		_, err := ConnectByConfig(context.Background(), dbConfig)
 		// Check error
 		require.ErrorIs(t, err, netErr)
 		assert.Empty(t, apitest.ListUnmatchedRequests())

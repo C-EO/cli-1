@@ -46,43 +46,48 @@ func GetServiceImages() []string {
 		utils.Config.Db.Image,
 		utils.Config.Auth.Image,
 		utils.Config.Api.Image,
-		utils.RealtimeImage,
+		utils.Config.Realtime.Image,
 		utils.Config.Storage.Image,
-		utils.EdgeRuntimeImage,
-		utils.StudioImage,
-		utils.PgmetaImage,
-		utils.LogflareImage,
-		utils.PgbouncerImage,
-		utils.ImageProxyImage,
+		utils.Config.EdgeRuntime.Image,
+		utils.Config.Studio.Image,
+		utils.Config.Studio.PgmetaImage,
+		utils.Config.Analytics.Image,
+		utils.Config.Db.Pooler.Image,
 	}
 }
 
 func GetRemoteImages(ctx context.Context, projectRef string) map[string]string {
-	const cap = 4
-	linked := make(map[string]string, cap)
+	linked := make(map[string]string, 4)
 	var wg sync.WaitGroup
-	wg.Add(cap)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if version, err := tenant.GetDatabaseVersion(ctx, projectRef); err == nil {
 			linked[utils.Config.Db.Image] = version
 		}
 	}()
+	keys, err := tenant.GetApiKeys(ctx, projectRef)
+	if err != nil {
+		wg.Wait()
+		return linked
+	}
+	api := tenant.NewTenantAPI(ctx, projectRef, keys.Anon)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		if version, err := tenant.GetGotrueVersion(ctx, projectRef); err == nil {
+		if version, err := api.GetGotrueVersion(ctx); err == nil {
 			linked[utils.Config.Auth.Image] = version
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		if version, err := tenant.GetPostgrestVersion(ctx, projectRef); err == nil {
+		if version, err := api.GetPostgrestVersion(ctx); err == nil {
 			linked[utils.Config.Api.Image] = version
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		if version, err := tenant.GetStorageVersion(ctx, projectRef); err == nil {
+		if version, err := api.GetStorageVersion(ctx); err == nil {
 			linked[utils.Config.Storage.Image] = version
 		}
 	}()

@@ -8,7 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/go-errors/errors"
 	"github.com/joho/godotenv"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -28,6 +28,11 @@ var (
 		OutputJson,
 		OutputToml,
 		OutputYaml,
+	}
+
+	OutputFormat = EnumFlag{
+		Allowed: OutputDefaultAllowed,
+		Value:   OutputPretty,
 	}
 )
 

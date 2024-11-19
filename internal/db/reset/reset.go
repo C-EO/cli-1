@@ -14,7 +14,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/go-errors/errors"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
@@ -24,21 +23,9 @@ import (
 	"github.com/supabase/cli/internal/gen/keys"
 	"github.com/supabase/cli/internal/migration/apply"
 	"github.com/supabase/cli/internal/migration/repair"
-	"github.com/supabase/cli/internal/status"
+	"github.com/supabase/cli/internal/seed/buckets"
 	"github.com/supabase/cli/internal/utils"
-	"github.com/supabase/cli/internal/utils/pgxv5"
-)
-
-const (
-	SET_POSTGRES_ROLE = "SET ROLE postgres;"
-	LIST_SCHEMAS      = "SELECT schema_name FROM information_schema.schemata WHERE NOT schema_name LIKE ANY($1) ORDER BY schema_name"
-)
-
-var (
-	ErrUnhealthy   = errors.New("service not healthy")
-	serviceTimeout = 30 * time.Second
-	//go:embed templates/drop.sql
-	dropObjects string
+	"github.com/supabase/cli/pkg/migration"
 )
 
 func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
@@ -51,22 +38,33 @@ func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.F
 		}
 	}
 	if !utils.IsLocalDatabase(config) {
-		if shouldReset := utils.PromptYesNo("Confirm resetting the remote database?", true, os.Stdin); !shouldReset {
+		msg := "Do you want to reset the remote database?"
+		if shouldReset, err := utils.NewConsole().PromptYesNo(ctx, msg, false); err != nil {
+			return err
+		} else if !shouldReset {
 			return errors.New(context.Canceled)
 		}
 		return resetRemote(ctx, version, config, fsys, options...)
 	}
-
 	// Config file is loaded before parsing --linked or --local flags
 	if err := utils.AssertSupabaseDbIsRunning(); err != nil {
 		return err
 	}
-
 	// Reset postgres database because extensions (pg_cron, pg_net) require postgres
 	if err := resetDatabase(ctx, version, fsys, options...); err != nil {
 		return err
 	}
-
+	// Seed objects from supabase/buckets directory
+	if resp, err := utils.Docker.ContainerInspect(ctx, utils.StorageId); err == nil {
+		if resp.State.Health == nil || resp.State.Health.Status != types.Healthy {
+			if err := start.WaitForHealthyService(ctx, 30*time.Second, utils.StorageId); err != nil {
+				return err
+			}
+		}
+		if err := buckets.Run(ctx, "", false, fsys); err != nil {
+			return err
+		}
+	}
 	branch := keys.GetGitBranch(fsys)
 	fmt.Fprintln(os.Stderr, "Finished "+utils.Aqua("supabase db reset")+" on branch "+utils.Aqua(branch)+".")
 	return nil
@@ -102,24 +100,15 @@ func resetDatabase14(ctx context.Context, version string, fsys afero.Fs, options
 		return err
 	}
 	defer conn.Close(context.Background())
-	if utils.Config.Db.MajorVersion > 14 {
-		if err := start.SetupDatabase(ctx, conn, utils.DbId, os.Stderr, fsys); err != nil {
-			return err
-		}
-	}
 	return apply.MigrateAndSeed(ctx, version, conn, fsys)
 }
 
 func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
-	if err := utils.Docker.ContainerRemove(ctx, utils.DbId, types.ContainerRemoveOptions{Force: true}); err != nil {
+	if err := utils.Docker.ContainerRemove(ctx, utils.DbId, container.RemoveOptions{Force: true}); err != nil {
 		return errors.Errorf("failed to remove container: %w", err)
 	}
 	if err := utils.Docker.VolumeRemove(ctx, utils.DbId, true); err != nil {
 		return errors.Errorf("failed to remove volume: %w", err)
-	}
-	// Skip syslog if vector container is not started
-	if _, err := utils.Docker.ContainerInspect(ctx, utils.VectorId); err != nil {
-		utils.Config.Analytics.Enabled = false
 	}
 	config := start.NewContainerConfig()
 	hostConfig := start.NewHostConfig()
@@ -134,18 +123,10 @@ func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, options
 	if _, err := utils.DockerStart(ctx, config, hostConfig, networkingConfig, utils.DbId); err != nil {
 		return err
 	}
-	if !start.WaitForHealthyService(ctx, utils.DbId, start.HealthTimeout) {
-		return errors.New(start.ErrDatabase)
-	}
-	conn, err := utils.ConnectLocalPostgres(ctx, pgconn.Config{}, options...)
-	if err != nil {
+	if err := start.WaitForHealthyService(ctx, start.HealthTimeout, utils.DbId); err != nil {
 		return err
 	}
-	defer conn.Close(context.Background())
-	if err := start.SetupDatabase(ctx, conn, utils.DbId, os.Stderr, fsys); err != nil {
-		return err
-	}
-	if err := apply.MigrateAndSeed(ctx, version, conn, fsys); err != nil {
+	if err := start.SetupLocalDatabase(ctx, version, fsys, os.Stderr, options...); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Restarting containers...")
@@ -158,7 +139,7 @@ func initDatabase(ctx context.Context, options ...func(*pgx.ConnConfig)) error {
 		return err
 	}
 	defer conn.Close(context.Background())
-	return apply.BatchExecDDL(ctx, conn, strings.NewReader(utils.InitialSchemaSql))
+	return start.InitSchema14(ctx, conn)
 }
 
 // Recreate postgres database by connecting to template1
@@ -172,10 +153,12 @@ func recreateDatabase(ctx context.Context, options ...func(*pgx.ConnConfig)) err
 		return err
 	}
 	// We are not dropping roles here because they are cluster level entities. Use stop && start instead.
-	sql := repair.MigrationFile{
-		Lines: []string{
+	sql := migration.MigrationFile{
+		Statements: []string{
 			"DROP DATABASE IF EXISTS postgres WITH (FORCE)",
 			"CREATE DATABASE postgres WITH OWNER postgres",
+			"DROP DATABASE IF EXISTS _supabase WITH (FORCE)",
+			"CREATE DATABASE _supabase WITH OWNER postgres",
 		},
 	}
 	return sql.ExecBatch(ctx, conn)
@@ -204,18 +187,18 @@ func RestartDatabase(ctx context.Context, w io.Writer) error {
 	if err := utils.Docker.ContainerRestart(ctx, utils.DbId, container.StopOptions{}); err != nil {
 		return errors.Errorf("failed to restart container: %w", err)
 	}
-	if !start.WaitForHealthyService(ctx, utils.DbId, start.HealthTimeout) {
-		return errors.New(start.ErrDatabase)
+	if err := start.WaitForHealthyService(ctx, start.HealthTimeout, utils.DbId); err != nil {
+		return err
 	}
 	return restartServices(ctx)
 }
 
 func restartServices(ctx context.Context) error {
 	// No need to restart PostgREST because it automatically reconnects and listens for schema changes
-	services := []string{utils.StorageId, utils.GotrueId, utils.RealtimeId}
+	services := listServicesToRestart()
 	result := utils.WaitAll(services, func(id string) error {
 		if err := utils.Docker.ContainerRestart(ctx, id, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
-			return errors.Errorf("Failed to restart %s: %w", id, err)
+			return errors.Errorf("failed to restart %s: %w", id, err)
 		}
 		return nil
 	})
@@ -223,83 +206,24 @@ func restartServices(ctx context.Context) error {
 	return errors.Join(result...)
 }
 
-func WaitForServiceReady(ctx context.Context, started []string) error {
-	probe := func() bool {
-		var unhealthy []string
-		for _, container := range started {
-			if !status.IsServiceReady(ctx, container) {
-				unhealthy = append(unhealthy, container)
-			}
-		}
-		started = unhealthy
-		return len(started) == 0
-	}
-	if !start.RetryEverySecond(ctx, probe, serviceTimeout) {
-		// Print container logs for easier debugging
-		for _, container := range started {
-			logs, err := utils.Docker.ContainerLogs(ctx, container, types.ContainerLogsOptions{
-				ShowStdout: true,
-				ShowStderr: true,
-			})
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				continue
-			}
-			fmt.Fprintln(os.Stderr, container, "container logs:")
-			if _, err := stdcopy.StdCopy(os.Stderr, os.Stderr, logs); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-			}
-			logs.Close()
-		}
-		return errors.Errorf("%w: %v", ErrUnhealthy, started)
-	}
-	return nil
+func listServicesToRestart() []string {
+	return []string{utils.StorageId, utils.GotrueId, utils.RealtimeId, utils.PoolerId}
 }
 
 func resetRemote(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
 	fmt.Fprintln(os.Stderr, "Resetting remote database"+toLogMessage(version))
-	conn, err := utils.ConnectRemotePostgres(ctx, config, options...)
+	conn, err := utils.ConnectByConfigStream(ctx, config, io.Discard, options...)
 	if err != nil {
 		return err
 	}
 	defer conn.Close(context.Background())
-	// List user defined schemas
-	excludes := []string{"public"}
-	for _, schema := range utils.InternalSchemas {
-		if schema != "supabase_migrations" {
-			excludes = append(excludes, schema)
-		}
-	}
-	userSchemas, err := ListSchemas(ctx, conn, excludes...)
-	if err != nil {
-		return err
-	}
-	// Drop user defined objects
-	migration := repair.MigrationFile{}
-	for _, schema := range userSchemas {
-		sql := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schema)
-		migration.Lines = append(migration.Lines, sql)
-	}
-	migration.Lines = append(migration.Lines, dropObjects)
-	if err := migration.ExecBatch(ctx, conn); err != nil {
+	if err := migration.DropUserSchemas(ctx, conn); err != nil {
 		return err
 	}
 	return apply.MigrateAndSeed(ctx, version, conn, fsys)
 }
 
-func ListSchemas(ctx context.Context, conn *pgx.Conn, exclude ...string) ([]string, error) {
-	exclude = likeEscapeSchema(exclude)
-	if len(exclude) == 0 {
-		exclude = append(exclude, "")
-	}
-	rows, err := conn.Query(ctx, LIST_SCHEMAS, exclude)
-	if err != nil {
-		return nil, errors.Errorf("failed to list schemas: %w", err)
-	}
-	return pgxv5.CollectStrings(rows)
-}
-
-func likeEscapeSchema(schemas []string) (result []string) {
+func LikeEscapeSchema(schemas []string) (result []string) {
 	// Treat _ as literal, * as any character
 	replacer := strings.NewReplacer("_", `\_`, "*", "%")
 	for _, sch := range schemas {

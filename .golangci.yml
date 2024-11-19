@@ -16,12 +16,8 @@ linters:
     - staticcheck
     - ineffassign
     - unused
-issues:
-  exclude-rules:
-    - linters:
-        - stylecheck
-      text: "ST1003:"
-    - linters:
-        - staticcheck
-        - stylecheck
-      text: "ST1005:"
+linters-settings:
+  stylecheck:
+    checks: ["all", "-ST1003"]
+  dupl:
+    threshold: 200

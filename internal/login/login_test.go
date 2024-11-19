@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/h2non/gock"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,6 @@ import (
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/credentials"
 	"github.com/zalando/go-keyring"
-	"gopkg.in/h2non/gock.v1"
 )
 
 type MockEncryption struct {
@@ -40,7 +40,7 @@ func TestLoginCommand(t *testing.T) {
 			Token: token,
 			Fsys:  afero.NewMemMapFs(),
 		}))
-		saved, err := credentials.Get(utils.AccessTokenKey)
+		saved, err := credentials.StoreProvider.Get(utils.AccessTokenKey)
 		assert.NoError(t, err)
 		assert.Equal(t, token, saved)
 	})
@@ -83,8 +83,9 @@ func TestLoginCommand(t *testing.T) {
 		expectedBrowserUrl := fmt.Sprintf("%s/cli/login?session_id=%s&token_name=%s&public_key=%s", utils.GetSupabaseDashboardURL(), sessionId, tokenName, publicKey)
 		assert.Contains(t, out.String(), expectedBrowserUrl)
 
-		saved, err := credentials.Get(utils.AccessTokenKey)
+		saved, err := credentials.StoreProvider.Get(utils.AccessTokenKey)
 		assert.NoError(t, err)
 		assert.Equal(t, token, saved)
+		assert.Empty(t, apitest.ListUnmatchedRequests())
 	})
 }

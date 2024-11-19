@@ -2,7 +2,7 @@ openapi: 3.0.0
 paths:
   /v1/branches/{branch_id}:
     get:
-      operationId: getBranchDetails
+      operationId: v1-get-a-branch-config
       summary: Get database branch config
       description: Fetches configurations of the specified database branch
       parameters:
@@ -22,11 +22,11 @@ paths:
         '500':
           description: Failed to retrieve database branch
       tags:
-        - database branches (beta)
+        - Environments
       security:
         - bearer: []
     patch:
-      operationId: updateBranch
+      operationId: v1-update-a-branch-config
       summary: Update database branch config
       description: Updates the configuration of the specified database branch
       parameters:
@@ -52,11 +52,11 @@ paths:
         '500':
           description: Failed to update database branch
       tags:
-        - database branches (beta)
+        - Environments
       security:
         - bearer: []
     delete:
-      operationId: deleteBranch
+      operationId: v1-delete-a-branch
       summary: Delete a database branch
       description: Deletes the specified database branch
       parameters:
@@ -69,15 +69,44 @@ paths:
       responses:
         '200':
           description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchDeleteResponse'
         '500':
           description: Failed to delete database branch
       tags:
-        - database branches (beta)
+        - Environments
+      security:
+        - bearer: []
+  /v1/branches/{branch_id}/reset:
+    post:
+      operationId: v1-reset-a-branch
+      summary: Resets a database branch
+      description: Resets the specified database branch
+      parameters:
+        - name: branch_id
+          required: true
+          in: path
+          description: Branch ID
+          schema:
+            type: string
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResetResponse'
+        '500':
+          description: Failed to reset database branch
+      tags:
+        - Environments
       security:
         - bearer: []
   /v1/projects:
     get:
-      operationId: getProjects
+      operationId: v1-list-all-projects
       summary: List all projects
       description: Returns a list of all projects you've previously created.
       parameters: []
@@ -89,13 +118,13 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ProjectResponse'
+                  $ref: '#/components/schemas/V1ProjectResponse'
       tags:
-        - projects
+        - Projects
       security:
         - bearer: []
     post:
-      operationId: createProject
+      operationId: v1-create-a-project
       summary: Create a project
       parameters: []
       requestBody:
@@ -103,21 +132,21 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateProjectBody'
+              $ref: '#/components/schemas/V1CreateProjectBody'
       responses:
         '201':
           description: ''
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectResponse'
+                $ref: '#/components/schemas/V1ProjectResponse'
       tags:
-        - projects
+        - Projects
       security:
         - bearer: []
   /v1/organizations:
     get:
-      operationId: getOrganizations
+      operationId: v1-list-all-organizations
       summary: List all organizations
       description: Returns a list of organizations that you currently belong to.
       parameters: []
@@ -133,11 +162,11 @@ paths:
         '500':
           description: Unexpected error listing organizations
       tags:
-        - organizations
+        - Organizations
       security:
         - bearer: []
     post:
-      operationId: createOrganization
+      operationId: v1-create-an-organization
       summary: Create an organization
       parameters: []
       requestBody:
@@ -156,13 +185,13 @@ paths:
         '500':
           description: Unexpected error creating an organization
       tags:
-        - organizations
+        - Organizations
       security:
         - bearer: []
   /v1/oauth/authorize:
     get:
-      operationId: authorize
-      summary: Authorize user through oauth
+      operationId: v1-authorize-user
+      summary: '[Beta] Authorize user through oauth'
       parameters:
         - name: client_id
           required: true
@@ -216,11 +245,14 @@ paths:
         '303':
           description: ''
       tags:
-        - oauth (beta)
+        - OAuth
+      security:
+        - oauth2:
+            - read
   /v1/oauth/token:
     post:
-      operationId: token
-      summary: Exchange auth code for user's access and refresh token
+      operationId: v1-exchange-oauth-token
+      summary: '[Beta] Exchange auth code for user''s access and refresh token'
       parameters: []
       requestBody:
         required: true
@@ -236,10 +268,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/OAuthTokenResponse'
       tags:
-        - oauth (beta)
+        - OAuth
+      security:
+        - oauth2:
+            - write
   /v1/snippets:
     get:
-      operationId: listSnippets
+      operationId: v1-list-all-snippets
       summary: Lists SQL snippets for the logged in user
       parameters:
         - name: project_ref
@@ -257,12 +292,12 @@ paths:
         '500':
           description: Failed to list user's SQL snippets
       tags:
-        - snippets
+        - Database
       security:
         - bearer: []
   /v1/snippets/{id}:
     get:
-      operationId: getSnippet
+      operationId: v1-get-a-snippet
       summary: Gets a specific SQL snippet
       parameters:
         - name: id
@@ -280,12 +315,12 @@ paths:
         '500':
           description: Failed to retrieve SQL snippet
       tags:
-        - snippets
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/api-keys:
     get:
-      operationId: getProjectApiKeys
+      operationId: v1-get-project-api-keys
       summary: Get project api keys
       parameters:
         - name: ref
@@ -305,15 +340,107 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ApiKeyResponse'
+      tags:
+        - Secrets
+      security:
+        - bearer: []
+    post:
+      operationId: createApiKey
+      summary: '[Alpha] Creates a new API key for the project'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyBody'
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+      tags:
+        - Secrets
+      security:
+        - bearer: []
+  /v1/projects/{ref}/api-keys/{id}:
+    patch:
+      operationId: updateApiKey
+      summary: '[Alpha] Updates an API key for the project'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateApiKeyBody'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+      tags:
+        - Secrets
+      security:
+        - bearer: []
+    delete:
+      operationId: deleteApiKey
+      summary: '[Alpha] Deletes an API key for the project'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
         '403':
           description: ''
       tags:
-        - projects
+        - Secrets
       security:
         - bearer: []
   /v1/projects/{ref}/branches:
     get:
-      operationId: getBranches
+      operationId: v1-list-all-branches
       summary: List all database branches
       description: Returns all database branches of the specified project.
       parameters:
@@ -337,11 +464,11 @@ paths:
         '500':
           description: Failed to retrieve database branches
       tags:
-        - database branches (beta)
+        - Environments
       security:
         - bearer: []
     post:
-      operationId: createBranch
+      operationId: v1-create-a-branch
       summary: Create a database branch
       description: Creates a database branch from the specified project.
       parameters:
@@ -369,11 +496,11 @@ paths:
         '500':
           description: Failed to create database branch
       tags:
-        - database branches (beta)
+        - Environments
       security:
         - bearer: []
     delete:
-      operationId: disableBranch
+      operationId: v1-disable-preview-branching
       summary: Disables preview branching
       description: Disables preview branching for the specified project
       parameters:
@@ -391,13 +518,13 @@ paths:
         '500':
           description: Failed to disable preview branching
       tags:
-        - database branches (beta)
+        - Environments
       security:
         - bearer: []
   /v1/projects/{ref}/custom-hostname:
     get:
-      operationId: getCustomHostnameConfig
-      summary: Gets project's custom hostname config
+      operationId: v1-get-hostname-config
+      summary: '[Beta] Gets project''s custom hostname config'
       parameters:
         - name: ref
           required: true
@@ -419,12 +546,12 @@ paths:
         '500':
           description: Failed to retrieve project's custom hostname config
       tags:
-        - custom hostname (beta)
+        - Domains
       security:
         - bearer: []
     delete:
-      operationId: removeCustomHostnameConfig
-      summary: Deletes a project's custom hostname configuration
+      operationId: v1-Delete hostname config
+      summary: '[Beta] Deletes a project''s custom hostname configuration'
       parameters:
         - name: ref
           required: true
@@ -442,13 +569,13 @@ paths:
         '500':
           description: Failed to delete project custom hostname configuration
       tags:
-        - custom hostname (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/custom-hostname/initialize:
     post:
-      operationId: createCustomHostnameConfig
-      summary: Updates project's custom hostname configuration
+      operationId: v1-update-hostname-config
+      summary: '[Beta] Updates project''s custom hostname configuration'
       parameters:
         - name: ref
           required: true
@@ -476,15 +603,15 @@ paths:
         '500':
           description: Failed to update project custom hostname configuration
       tags:
-        - custom hostname (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/custom-hostname/reverify:
     post:
-      operationId: reverify
+      operationId: v1-verify-dns-config
       summary: >-
-        Attempts to verify the DNS configuration for project's custom hostname
-        configuration
+        [Beta] Attempts to verify the DNS configuration for project's custom
+        hostname configuration
       parameters:
         - name: ref
           required: true
@@ -506,13 +633,13 @@ paths:
         '500':
           description: Failed to verify project custom hostname configuration
       tags:
-        - custom hostname (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/custom-hostname/activate:
     post:
-      operationId: activate
-      summary: Activates a custom hostname for a project.
+      operationId: v1-activate-custom-hostname
+      summary: '[Beta] Activates a custom hostname for a project.'
       parameters:
         - name: ref
           required: true
@@ -534,13 +661,13 @@ paths:
         '500':
           description: Failed to activate project custom hostname configuration
       tags:
-        - custom hostname (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/network-bans/retrieve:
     post:
-      operationId: getNetworkBans
-      summary: Gets project's network bans
+      operationId: v1-list-all-network-bans
+      summary: '[Beta] Gets project''s network bans'
       parameters:
         - name: ref
           required: true
@@ -562,13 +689,13 @@ paths:
         '500':
           description: Failed to retrieve project's network bans
       tags:
-        - network bans (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/network-bans:
     delete:
-      operationId: removeNetworkBan
-      summary: Remove network bans.
+      operationId: v1-delete-network-bans
+      summary: '[Beta] Remove network bans.'
       parameters:
         - name: ref
           required: true
@@ -592,13 +719,13 @@ paths:
         '500':
           description: Failed to remove network bans.
       tags:
-        - network bans (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/network-restrictions:
     get:
-      operationId: getNetworkRestrictions
-      summary: Gets project's network restrictions
+      operationId: v1-get-network-restrictions
+      summary: '[Beta] Gets project''s network restrictions'
       parameters:
         - name: ref
           required: true
@@ -620,13 +747,13 @@ paths:
         '500':
           description: Failed to retrieve project's network restrictions
       tags:
-        - network restrictions (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/network-restrictions/apply:
     post:
-      operationId: applyNetworkRestrictions
-      summary: Updates project's network restrictions
+      operationId: v1-update-network-restrictions
+      summary: '[Beta] Updates project''s network restrictions'
       parameters:
         - name: ref
           required: true
@@ -654,13 +781,13 @@ paths:
         '500':
           description: Failed to update project network restrictions
       tags:
-        - network restrictions (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/pgsodium:
     get:
-      operationId: getPgsodiumConfig
-      summary: Gets project's pgsodium config
+      operationId: v1-get-pgsodium-config
+      summary: '[Beta] Gets project''s pgsodium config'
       parameters:
         - name: ref
           required: true
@@ -682,14 +809,14 @@ paths:
         '500':
           description: Failed to retrieve project's pgsodium config
       tags:
-        - pgsodium (beta)
+        - Secrets
       security:
         - bearer: []
     put:
-      operationId: updatePgsodiumConfig
+      operationId: v1-update-pgsodium-config
       summary: >-
-        Updates project's pgsodium config. Updating the root_key can cause all
-        data encrypted with the older key to become inaccessible.
+        [Beta] Updates project's pgsodium config. Updating the root_key can
+        cause all data encrypted with the older key to become inaccessible.
       parameters:
         - name: ref
           required: true
@@ -717,12 +844,12 @@ paths:
         '500':
           description: Failed to update project's pgsodium config
       tags:
-        - pgsodium (beta)
+        - Secrets
       security:
         - bearer: []
   /v1/projects/{ref}/postgrest:
     get:
-      operationId: getPostgRESTConfig
+      operationId: v1-get-postgrest-service-config
       summary: Gets project's postgrest config
       parameters:
         - name: ref
@@ -745,11 +872,11 @@ paths:
         '500':
           description: Failed to retrieve project's postgrest config
       tags:
-        - services
+        - Rest
       security:
         - bearer: []
     patch:
-      operationId: updatePostgRESTConfig
+      operationId: v1-update-postgrest-service-config
       summary: Updates project's postgrest config
       parameters:
         - name: ref
@@ -772,18 +899,43 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PostgrestConfigResponse'
+                $ref: '#/components/schemas/V1PostgrestConfigResponse'
         '403':
           description: ''
         '500':
           description: Failed to update project's postgrest config
       tags:
-        - services
+        - Rest
       security:
         - bearer: []
   /v1/projects/{ref}:
+    get:
+      operationId: v1-get-project
+      summary: Gets a specific project that belongs to the authenticated user
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V1ProjectResponse'
+        '500':
+          description: Failed to retrieve project
+      tags:
+        - Projects
+      security:
+        - bearer: []
     delete:
-      operationId: deleteProject
+      operationId: v1-delete-a-project
       summary: Deletes the given project
       parameters:
         - name: ref
@@ -800,16 +952,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectRefResponse'
+                $ref: '#/components/schemas/V1ProjectRefResponse'
         '403':
           description: ''
       tags:
-        - projects
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/secrets:
     get:
-      operationId: getSecrets
+      operationId: v1-list-all-secrets
       summary: List all secrets
       description: Returns all secrets you've previously added to the specified project.
       parameters:
@@ -835,11 +987,11 @@ paths:
         '500':
           description: Failed to retrieve project's secrets
       tags:
-        - secrets
+        - Secrets
       security:
         - bearer: []
     post:
-      operationId: createSecrets
+      operationId: v1-bulk-create-secrets
       summary: Bulk create secrets
       description: Creates multiple secrets and adds them to the specified project.
       parameters:
@@ -867,11 +1019,11 @@ paths:
         '500':
           description: Failed to create project's secrets
       tags:
-        - secrets
+        - Secrets
       security:
         - bearer: []
     delete:
-      operationId: deleteSecrets
+      operationId: v1-bulk-delete-secrets
       summary: Bulk delete secrets
       description: Deletes all secrets with the given names from the specified project
       parameters:
@@ -903,13 +1055,13 @@ paths:
         '500':
           description: Failed to delete secrets with given names
       tags:
-        - secrets
+        - Secrets
       security:
         - bearer: []
   /v1/projects/{ref}/ssl-enforcement:
     get:
-      operationId: getSslEnforcementConfig
-      summary: Get project's SSL enforcement configuration.
+      operationId: v1-get-ssl-enforcement-config
+      summary: '[Beta] Get project''s SSL enforcement configuration.'
       parameters:
         - name: ref
           required: true
@@ -931,12 +1083,12 @@ paths:
         '500':
           description: Failed to retrieve project's SSL enforcement config
       tags:
-        - ssl enforcement (beta)
+        - Database
       security:
         - bearer: []
     put:
-      operationId: updateSslEnforcementConfig
-      summary: Update project's SSL enforcement configuration.
+      operationId: v1-update-ssl-enforcement-config
+      summary: '[Beta] Update project''s SSL enforcement configuration.'
       parameters:
         - name: ref
           required: true
@@ -964,12 +1116,12 @@ paths:
         '500':
           description: Failed to update project's SSL enforcement configuration.
       tags:
-        - ssl enforcement (beta)
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/types/typescript:
     get:
-      operationId: getTypescriptTypes
+      operationId: v1-generate-typescript-types
       summary: Generate TypeScript types
       description: Returns the TypeScript types of your schema for use with supabase-js.
       parameters:
@@ -999,13 +1151,13 @@ paths:
         '500':
           description: Failed to generate TypeScript types
       tags:
-        - projects
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/vanity-subdomain:
     get:
-      operationId: getVanitySubdomainConfig
-      summary: Gets current vanity subdomain config
+      operationId: v1-get-vanity-subdomain-config
+      summary: '[Beta] Gets current vanity subdomain config'
       parameters:
         - name: ref
           required: true
@@ -1027,12 +1179,12 @@ paths:
         '500':
           description: Failed to get project vanity subdomain configuration
       tags:
-        - vanity subdomain (beta)
+        - Domains
       security:
         - bearer: []
     delete:
-      operationId: removeVanitySubdomainConfig
-      summary: Deletes a project's vanity subdomain configuration
+      operationId: v1-deactivate-vanity-subdomain-config
+      summary: '[Beta] Deletes a project''s vanity subdomain configuration'
       parameters:
         - name: ref
           required: true
@@ -1050,13 +1202,13 @@ paths:
         '500':
           description: Failed to delete project vanity subdomain configuration
       tags:
-        - vanity subdomain (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/vanity-subdomain/check-availability:
     post:
-      operationId: checkVanitySubdomainAvailability
-      summary: Checks vanity subdomain availability
+      operationId: v1-check-vanity-subdomain-availability
+      summary: '[Beta] Checks vanity subdomain availability'
       parameters:
         - name: ref
           required: true
@@ -1084,13 +1236,13 @@ paths:
         '500':
           description: Failed to check project vanity subdomain configuration
       tags:
-        - vanity subdomain (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/vanity-subdomain/activate:
     post:
-      operationId: activateVanitySubdomainPlease
-      summary: Activates a vanity subdomain for a project.
+      operationId: v1-activate-vanity-subdomain-config
+      summary: '[Beta] Activates a vanity subdomain for a project.'
       parameters:
         - name: ref
           required: true
@@ -1118,13 +1270,13 @@ paths:
         '500':
           description: Failed to activate project vanity subdomain configuration
       tags:
-        - vanity subdomain (beta)
+        - Domains
       security:
         - bearer: []
   /v1/projects/{ref}/upgrade:
     post:
-      operationId: upgradeProject
-      summary: Upgrades the project's Postgres version
+      operationId: v1-upgrade-postgres-version
+      summary: '[Beta] Upgrades the project''s Postgres version'
       parameters:
         - name: ref
           required: true
@@ -1152,13 +1304,13 @@ paths:
         '500':
           description: Failed to initiate project upgrade
       tags:
-        - database version upgrade (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/upgrade/eligibility:
     get:
-      operationId: upgradeEligibilityInformation
-      summary: Returns the project's eligibility for upgrades
+      operationId: v1-get-postgres-upgrade-eligibility
+      summary: '[Beta] Returns the project''s eligibility for upgrades'
       parameters:
         - name: ref
           required: true
@@ -1180,13 +1332,13 @@ paths:
         '500':
           description: Failed to determine project upgrade eligibility
       tags:
-        - database version upgrade (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/upgrade/status:
     get:
-      operationId: getUpgradeStatus
-      summary: Gets the latest status of the project's upgrade
+      operationId: v1-get-postgres-upgrade-status
+      summary: '[Beta] Gets the latest status of the project''s upgrade'
       parameters:
         - name: ref
           required: true
@@ -1195,6 +1347,11 @@ paths:
           schema:
             minLength: 20
             maxLength: 20
+            type: string
+        - name: tracking_id
+          required: false
+          in: query
+          schema:
             type: string
       responses:
         '200':
@@ -1208,12 +1365,12 @@ paths:
         '500':
           description: Failed to retrieve project upgrade status
       tags:
-        - database version upgrade (beta)
+        - Projects
       security:
         - bearer: []
   /v1/projects/{ref}/readonly:
     get:
-      operationId: getReadOnlyModeStatus
+      operationId: v1-get-readonly-mode-status
       summary: Returns project's readonly mode status
       parameters:
         - name: ref
@@ -1234,12 +1391,12 @@ paths:
         '500':
           description: Failed to get project readonly mode status
       tags:
-        - database readonly mode
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/readonly/temporary-disable:
     post:
-      operationId: temporarilyDisableReadonlyMode
+      operationId: v1-disable-readonly-mode-temporarily
       summary: Disables project's readonly mode for the next 15 minutes
       parameters:
         - name: ref
@@ -1256,13 +1413,13 @@ paths:
         '500':
           description: Failed to disable project's readonly mode
       tags:
-        - database readonly mode
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/read-replicas/setup:
     post:
-      operationId: setUpReadReplica
-      summary: Set up a read replica
+      operationId: v1-setup-a-read-replica
+      summary: '[Beta] Set up a read replica'
       parameters:
         - name: ref
           required: true
@@ -1281,16 +1438,18 @@ paths:
       responses:
         '201':
           description: ''
+        '403':
+          description: ''
         '500':
           description: Failed to set up read replica
       tags:
-        - read replicas (beta)
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/read-replicas/remove:
     post:
-      operationId: removeReadReplica
-      summary: Remove a read replica
+      operationId: v1-remove-a-read-replica
+      summary: '[Beta] Remove a read replica'
       parameters:
         - name: ref
           required: true
@@ -1309,15 +1468,17 @@ paths:
       responses:
         '201':
           description: ''
+        '403':
+          description: ''
         '500':
           description: Failed to remove read replica
       tags:
-        - read replicas (beta)
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/health:
     get:
-      operationId: checkServiceHealth
+      operationId: v1-get-services-health
       summary: Gets project's service health status
       parameters:
         - name: ref
@@ -1357,16 +1518,75 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ServiceHealthResponse'
+                  $ref: '#/components/schemas/V1ServiceHealthResponse'
+        '403':
+          description: ''
         '500':
           description: Failed to retrieve project's service health status
       tags:
-        - services
+        - Projects
+      security:
+        - bearer: []
+  /v1/projects/{ref}/config/storage:
+    get:
+      operationId: v1-get-storage-config
+      summary: Gets project's storage config
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageConfigResponse'
+        '403':
+          description: ''
+        '500':
+          description: Failed to retrieve project's storage config
+      tags:
+        - Storage
+      security:
+        - bearer: []
+    patch:
+      operationId: v1-update-storage-config
+      summary: Updates project's storage config
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStorageConfigBody'
+      responses:
+        '200':
+          description: ''
+        '403':
+          description: ''
+        '500':
+          description: Failed to update project's storage config
+      tags:
+        - Storage
       security:
         - bearer: []
   /v1/projects/{ref}/config/database/postgres:
     get:
-      operationId: getConfig
+      operationId: v1-get-postgres-config
       summary: Gets project's Postgres config
       parameters:
         - name: ref
@@ -1387,11 +1607,11 @@ paths:
         '500':
           description: Failed to retrieve project's Postgres config
       tags:
-        - projects config
+        - Database
       security:
         - bearer: []
     put:
-      operationId: updateConfig
+      operationId: v1-update-postgres-config
       summary: Updates project's Postgres config
       parameters:
         - name: ref
@@ -1415,15 +1635,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PostgresConfigResponse'
+        '403':
+          description: ''
         '500':
           description: Failed to update project's Postgres config
       tags:
-        - projects config
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/config/database/pgbouncer:
     get:
-      operationId: v1GetPgbouncerConfig
+      operationId: v1-get-project-pgbouncer-config
       summary: Get project's pgbouncer config
       parameters:
         - name: ref
@@ -1444,10 +1666,71 @@ paths:
         '500':
           description: Failed to retrieve project's pgbouncer config
       tags:
-        - projects config
+        - Database
+  /v1/projects/{ref}/config/database/pooler:
+    get:
+      operationId: v1-get-supavisor-config
+      summary: Gets project's supavisor config
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SupavisorConfigResponse'
+        '500':
+          description: Failed to retrieve project's supavisor config
+      tags:
+        - Database
+      security:
+        - bearer: []
+    patch:
+      operationId: v1-update-supavisor-config
+      summary: Updates project's supavisor config
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSupavisorConfigBody'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateSupavisorConfigResponse'
+        '403':
+          description: ''
+        '500':
+          description: Failed to update project's supavisor config
+      tags:
+        - Database
+      security:
+        - bearer: []
   /v1/projects/{ref}/config/auth:
     get:
-      operationId: getV1AuthConfig
+      operationId: v1-get-auth-service-config
       summary: Gets project's auth config
       parameters:
         - name: ref
@@ -1470,11 +1753,11 @@ paths:
         '500':
           description: Failed to retrieve project's auth config
       tags:
-        - projects config
+        - Auth
       security:
         - bearer: []
     patch:
-      operationId: updateV1AuthConfig
+      operationId: v1-update-auth-service-config
       summary: Updates a project's auth config
       parameters:
         - name: ref
@@ -1503,13 +1786,13 @@ paths:
         '500':
           description: Failed to update project's auth config
       tags:
-        - projects config
+        - Auth
       security:
         - bearer: []
-  /v1/projects/{ref}/database/query:
+  /v1/projects/{ref}/config/auth/third-party-auth:
     post:
-      operationId: v1RunQuery
-      summary: Run sql query
+      operationId: createTPAForProject
+      summary: Creates a new third-party auth integration
       parameters:
         - name: ref
           required: true
@@ -1524,7 +1807,127 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RunQueryBody'
+              $ref: '#/components/schemas/CreateThirdPartyAuthBody'
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyAuth'
+        '403':
+          description: ''
+      tags:
+        - Auth
+      security:
+        - bearer: []
+    get:
+      operationId: listTPAForProject
+      summary: '[Alpha] Lists all third-party auth integrations'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ThirdPartyAuth'
+        '403':
+          description: ''
+      tags:
+        - Auth
+      security:
+        - bearer: []
+  /v1/projects/{ref}/config/auth/third-party-auth/{tpa_id}:
+    delete:
+      operationId: deleteTPAForProject
+      summary: '[Alpha] Removes a third-party auth integration'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+        - name: tpa_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyAuth'
+        '403':
+          description: ''
+      tags:
+        - Auth
+      security:
+        - bearer: []
+    get:
+      operationId: getTPAForProject
+      summary: '[Alpha] Get a third-party integration'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+        - name: tpa_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyAuth'
+        '403':
+          description: ''
+      tags:
+        - Auth
+      security:
+        - bearer: []
+  /v1/projects/{ref}/database/query:
+    post:
+      operationId: v1-run-a-query
+      summary: '[Beta] Run sql query'
+      parameters:
+        - name: ref
+          required: true
+          in: path
+          description: Project ref
+          schema:
+            minLength: 20
+            maxLength: 20
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/V1RunQueryBody'
       responses:
         '201':
           description: ''
@@ -1537,13 +1940,13 @@ paths:
         '500':
           description: Failed to run sql query
       tags:
-        - projects (beta)
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/database/webhooks/enable:
     post:
-      operationId: v1EnableDatabaseWebhooks
-      summary: Enables Database Webhooks on the project
+      operationId: v1-enable-database-webhook
+      summary: '[Beta] Enables Database Webhooks on the project'
       parameters:
         - name: ref
           required: true
@@ -1561,12 +1964,12 @@ paths:
         '500':
           description: Failed to enable Database Webhooks on the project
       tags:
-        - projects (beta)
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/functions:
     post:
-      operationId: createFunction
+      operationId: v1-create-a-function
       summary: Create a function
       description: Creates a function and adds it to the specified project.
       parameters:
@@ -1614,10 +2017,10 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateFunctionBody'
+              $ref: '#/components/schemas/V1CreateFunctionBody'
           application/vnd.denoland.eszip:
             schema:
-              $ref: '#/components/schemas/CreateFunctionBody'
+              $ref: '#/components/schemas/V1CreateFunctionBody'
       responses:
         '201':
           description: ''
@@ -1630,11 +2033,11 @@ paths:
         '500':
           description: Failed to create project's function
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
     get:
-      operationId: getFunctions
+      operationId: v1-list-all-functions
       summary: List all functions
       description: Returns all functions you've previously added to the specified project.
       parameters:
@@ -1660,12 +2063,12 @@ paths:
         '500':
           description: Failed to retrieve project's functions
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
   /v1/projects/{ref}/functions/{function_slug}:
     get:
-      operationId: getFunction
+      operationId: v1-get-a-function
       summary: Retrieve a function
       description: Retrieves a function with the specified slug and project.
       parameters:
@@ -1696,11 +2099,11 @@ paths:
         '500':
           description: Failed to retrieve function with given slug
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
     patch:
-      operationId: updateFunction
+      operationId: v1-update-a-function
       summary: Update a function
       description: Updates a function with the specified slug and project.
       parameters:
@@ -1755,10 +2158,10 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdateFunctionBody'
+              $ref: '#/components/schemas/V1UpdateFunctionBody'
           application/vnd.denoland.eszip:
             schema:
-              $ref: '#/components/schemas/UpdateFunctionBody'
+              $ref: '#/components/schemas/V1UpdateFunctionBody'
       responses:
         '200':
           description: ''
@@ -1771,11 +2174,11 @@ paths:
         '500':
           description: Failed to update function with given slug
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
     delete:
-      operationId: deleteFunction
+      operationId: v1-delete-a-function
       summary: Delete a function
       description: Deletes a function with the specified slug from the specified project.
       parameters:
@@ -1802,12 +2205,12 @@ paths:
         '500':
           description: Failed to delete function with given slug
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
   /v1/projects/{ref}/functions/{function_slug}/body:
     get:
-      operationId: getFunctionBody
+      operationId: v1-get-a-function-body
       summary: Retrieve a function body
       description: Retrieves a function body for the specified slug and project.
       parameters:
@@ -1834,12 +2237,12 @@ paths:
         '500':
           description: Failed to retrieve function body with given slug
       tags:
-        - functions
+        - Edge Functions
       security:
         - bearer: []
   /v1/projects/{ref}/storage/buckets:
     get:
-      operationId: getBuckets
+      operationId: v1-list-all-buckets
       summary: Lists all buckets
       parameters:
         - name: ref
@@ -1864,12 +2267,12 @@ paths:
         '500':
           description: Failed to get list of buckets
       tags:
-        - storage
+        - Storage
       security:
         - bearer: []
   /v1/projects/{ref}/config/auth/sso/providers:
     post:
-      operationId: createProviderForProject
+      operationId: v1-create-a-sso-provider
       summary: Creates a new SSO provider
       parameters:
         - name: ref
@@ -1898,11 +2301,11 @@ paths:
         '404':
           description: SAML 2.0 support is not enabled for this project
       tags:
-        - sso
+        - Auth
       security:
         - bearer: []
     get:
-      operationId: listAllProviders
+      operationId: v1-list-all-sso-provider
       summary: Lists all SSO providers
       parameters:
         - name: ref
@@ -1925,12 +2328,12 @@ paths:
         '404':
           description: SAML 2.0 support is not enabled for this project
       tags:
-        - sso
+        - Auth
       security:
         - bearer: []
   /v1/projects/{ref}/config/auth/sso/providers/{provider_id}:
     get:
-      operationId: getProviderById
+      operationId: v1-get-a-sso-provider
       summary: Gets a SSO provider by its UUID
       parameters:
         - name: ref
@@ -1960,11 +2363,11 @@ paths:
             Either SAML 2.0 was not enabled for this project, or the provider
             does not exist
       tags:
-        - sso
+        - Auth
       security:
         - bearer: []
     put:
-      operationId: updateProviderById
+      operationId: v1-update-a-sso-provider
       summary: Updates a SSO provider by its UUID
       parameters:
         - name: ref
@@ -2000,11 +2403,11 @@ paths:
             Either SAML 2.0 was not enabled for this project, or the provider
             does not exist
       tags:
-        - sso
+        - Auth
       security:
         - bearer: []
     delete:
-      operationId: removeProviderById
+      operationId: v1-delete-a-sso-provider
       summary: Removes a SSO provider by its UUID
       parameters:
         - name: ref
@@ -2034,12 +2437,12 @@ paths:
             Either SAML 2.0 was not enabled for this project, or the provider
             does not exist
       tags:
-        - sso
+        - Auth
       security:
         - bearer: []
   /v1/projects/{ref}/database/backups:
     get:
-      operationId: getBackups
+      operationId: v1-list-all-backups
       summary: Lists all backups
       parameters:
         - name: ref
@@ -2060,12 +2463,12 @@ paths:
         '500':
           description: Failed to get backups
       tags:
-        - backups
+        - Database
       security:
         - bearer: []
   /v1/projects/{ref}/database/backups/restore-pitr:
     post:
-      operationId: v1RestorePitr
+      operationId: v1-restore-pitr-backup
       summary: Restores a PITR backup for a database
       parameters:
         - name: ref
@@ -2086,12 +2489,12 @@ paths:
         '201':
           description: ''
       tags:
-        - backups
+        - Database
       security:
         - bearer: []
   /v1/organizations/{slug}/members:
     get:
-      operationId: v1ListOrganizationMembers
+      operationId: v1-list-organization-members
       summary: List members of an organization
       parameters:
         - name: slug
@@ -2109,12 +2512,12 @@ paths:
                 items:
                   $ref: '#/components/schemas/V1OrganizationMemberResponse'
       tags:
-        - organizations
+        - Organizations
       security:
         - bearer: []
   /v1/organizations/{slug}:
     get:
-      operationId: getOrganization
+      operationId: v1-get-an-organization
       summary: Gets information about the organization
       parameters:
         - name: slug
@@ -2130,19 +2533,40 @@ paths:
               schema:
                 $ref: '#/components/schemas/V1OrganizationSlugResponse'
       tags:
-        - organizations
+        - Organizations
       security:
         - bearer: []
 info:
   title: Supabase API (v1)
-  description: ''
+  description: >-
+    Supabase API generated from the OpenAPI specification.<br>Visit
+    [https://supabase.com/docs](https://supabase.com/docs) for a complete
+    documentation.
   version: 1.0.0
   contact: {}
 tags:
-  - name: organizations
-    description: Organization endpoints
-  - name: projects
-    description: Project endpoints
+  - name: Auth
+    description: Auth related endpoints
+  - name: Database
+    description: Database related endpoints
+  - name: Domains
+    description: Domains related endpoints
+  - name: Edge Functions
+    description: Edge related endpoints
+  - name: Environments
+    description: Environments related endpoints
+  - name: OAuth
+    description: OAuth related endpoints
+  - name: Organizations
+    description: Organizations related endpoints
+  - name: Projects
+    description: Projects related endpoints
+  - name: Rest
+    description: Rest related endpoints
+  - name: Secrets
+    description: Secrets related endpoints
+  - name: Storage
+    description: Storage related endpoints
 servers: []
 components:
   securitySchemes:
@@ -2160,6 +2584,10 @@ components:
           type: string
         postgres_version:
           type: string
+        postgres_engine:
+          type: string
+        release_channel:
+          type: string
         status:
           enum:
             - ACTIVE_HEALTHY
@@ -2169,10 +2597,14 @@ components:
             - INACTIVE
             - INIT_FAILED
             - REMOVED
-            - RESTORING
+            - RESTARTING
             - UNKNOWN
             - UPGRADING
             - PAUSING
+            - RESTORING
+            - RESTORE_FAILED
+            - PAUSE_FAILED
+            - RESIZING
           type: string
         db_host:
           type: string
@@ -2186,6 +2618,8 @@ components:
         - db_port
         - ref
         - postgres_version
+        - postgres_engine
+        - release_channel
         - status
         - db_host
     UpdateBranchBody:
@@ -2197,9 +2631,26 @@ components:
           type: string
         reset_on_push:
           type: boolean
+        persistent:
+          type: boolean
+        status:
+          enum:
+            - CREATING_PROJECT
+            - RUNNING_MIGRATIONS
+            - MIGRATIONS_PASSED
+            - MIGRATIONS_FAILED
+            - FUNCTIONS_DEPLOYED
+            - FUNCTIONS_FAILED
+          type: string
     BranchResponse:
       type: object
       properties:
+        pr_number:
+          type: integer
+          format: int32
+        latest_check_run_id:
+          type: integer
+          format: int64
         id:
           type: string
         name:
@@ -2212,9 +2663,9 @@ components:
           type: boolean
         git_branch:
           type: string
-        pr_number:
-          type: number
         reset_on_push:
+          type: boolean
+        persistent:
           type: boolean
         status:
           enum:
@@ -2222,6 +2673,8 @@ components:
             - RUNNING_MIGRATIONS
             - MIGRATIONS_PASSED
             - MIGRATIONS_FAILED
+            - FUNCTIONS_DEPLOYED
+            - FUNCTIONS_FAILED
           type: string
         created_at:
           type: string
@@ -2234,10 +2687,28 @@ components:
         - parent_project_ref
         - is_default
         - reset_on_push
+        - persistent
         - status
         - created_at
         - updated_at
-    DatabaseResponse:
+    BranchDeleteResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+    BranchResetResponse:
+      type: object
+      properties:
+        workflow_run_id:
+          type: string
+        message:
+          type: string
+      required:
+        - workflow_run_id
+        - message
+    V1DatabaseResponse:
       type: object
       properties:
         host:
@@ -2246,10 +2717,18 @@ components:
         version:
           type: string
           description: Database version
+        postgres_engine:
+          type: string
+          description: Database engine
+        release_channel:
+          type: string
+          description: Release channel
       required:
         - host
         - version
-    ProjectResponse:
+        - postgres_engine
+        - release_channel
+    V1ProjectResponse:
       type: object
       properties:
         id:
@@ -2270,14 +2749,61 @@ components:
           description: Creation timestamp
           example: '2023-03-29T16:32:59Z'
         database:
-          $ref: '#/components/schemas/DatabaseResponse'
+          $ref: '#/components/schemas/V1DatabaseResponse'
+        status:
+          enum:
+            - ACTIVE_HEALTHY
+            - ACTIVE_UNHEALTHY
+            - COMING_UP
+            - GOING_DOWN
+            - INACTIVE
+            - INIT_FAILED
+            - REMOVED
+            - RESTARTING
+            - UNKNOWN
+            - UPGRADING
+            - PAUSING
+            - RESTORING
+            - RESTORE_FAILED
+            - PAUSE_FAILED
+            - RESIZING
+          type: string
       required:
         - id
         - organization_id
         - name
         - region
         - created_at
-    CreateProjectBody:
+        - status
+    DesiredInstanceSize:
+      type: string
+      enum:
+        - micro
+        - small
+        - medium
+        - large
+        - xlarge
+        - 2xlarge
+        - 4xlarge
+        - 8xlarge
+        - 12xlarge
+        - 16xlarge
+    ReleaseChannel:
+      type: string
+      enum:
+        - internal
+        - alpha
+        - beta
+        - ga
+        - withdrawn
+    PostgresEngine:
+      type: string
+      description: >-
+        Postgres engine version. If not provided, the latest version will be
+        used.
+      enum:
+        - '15'
+    V1CreateProjectBody:
       type: object
       properties:
         db_pass:
@@ -2295,7 +2821,7 @@ components:
             - free
             - pro
           description: >-
-            Subscription plan is now set on organization level and is ignored in
+            Subscription Plan is now set on organization level and is ignored in
             this request
           example: free
           deprecated: true
@@ -2303,6 +2829,7 @@ components:
           type: string
           enum:
             - us-east-1
+            - us-east-2
             - us-west-1
             - us-west-2
             - ap-east-1
@@ -2313,7 +2840,9 @@ components:
             - eu-west-1
             - eu-west-2
             - eu-west-3
+            - eu-north-1
             - eu-central-1
+            - eu-central-2
             - ca-central-1
             - ap-south-1
             - sa-east-1
@@ -2322,6 +2851,18 @@ components:
         kps_enabled:
           type: boolean
           deprecated: true
+          description: This field is deprecated and is ignored in this request
+        desired_instance_size:
+          $ref: '#/components/schemas/DesiredInstanceSize'
+        template_url:
+          type: string
+          description: Template URL used to create the project from the CLI.
+          example: >-
+            https://github.com/supabase/supabase/tree/master/examples/slack-clone/nextjs-slack-clone
+        release_channel:
+          $ref: '#/components/schemas/ReleaseChannel'
+        postgres_engine:
+          $ref: '#/components/schemas/PostgresEngine'
       required:
         - db_pass
         - name
@@ -2371,6 +2912,9 @@ components:
     OAuthTokenResponse:
       type: object
       properties:
+        expires_in:
+          type: integer
+          format: int64
         token_type:
           type: string
           enum:
@@ -2379,18 +2923,17 @@ components:
           type: string
         refresh_token:
           type: string
-        expires_in:
-          type: number
       required:
+        - expires_in
         - token_type
         - access_token
         - refresh_token
-        - expires_in
     SnippetProject:
       type: object
       properties:
         id:
-          type: number
+          type: integer
+          format: int64
         name:
           type: string
       required:
@@ -2400,7 +2943,8 @@ components:
       type: object
       properties:
         id:
-          type: number
+          type: integer
+          format: int64
         username:
           type: string
       required:
@@ -2430,7 +2974,6 @@ components:
           type: string
         description:
           type: string
-          nullable: true
         project:
           $ref: '#/components/schemas/SnippetProject'
         owner:
@@ -2444,7 +2987,6 @@ components:
         - type
         - visibility
         - name
-        - description
         - project
         - owner
         - updated_by
@@ -2494,7 +3036,6 @@ components:
           type: string
         description:
           type: string
-          nullable: true
         project:
           $ref: '#/components/schemas/SnippetProject'
         owner:
@@ -2510,32 +3051,194 @@ components:
         - type
         - visibility
         - name
-        - description
         - project
         - owner
         - updated_by
         - content
+    ApiKeySecretJWTTemplate:
+      type: object
+      properties:
+        role:
+          type: string
+      required:
+        - role
     ApiKeyResponse:
       type: object
       properties:
+        type:
+          nullable: true
+          type: string
+          enum:
+            - publishable
+            - secret
+            - legacy
         name:
           type: string
         api_key:
           type: string
+        id:
+          type: string
+          nullable: true
+        prefix:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        hash:
+          type: string
+          nullable: true
+        secret_jwt_template:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ApiKeySecretJWTTemplate'
+        inserted_at:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          nullable: true
       required:
         - name
         - api_key
+    CreateApiKeyBody:
+      type: object
+      properties:
+        type:
+          enum:
+            - publishable
+            - secret
+          type: string
+        description:
+          type: string
+          nullable: true
+        secret_jwt_template:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ApiKeySecretJWTTemplate'
+      required:
+        - type
+    UpdateApiKeyBody:
+      type: object
+      properties:
+        description:
+          type: string
+          nullable: true
+        secret_jwt_template:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ApiKeySecretJWTTemplate'
     CreateBranchBody:
       type: object
       properties:
+        desired_instance_size:
+          $ref: '#/components/schemas/DesiredInstanceSize'
+        release_channel:
+          $ref: '#/components/schemas/ReleaseChannel'
+        postgres_engine:
+          $ref: '#/components/schemas/PostgresEngine'
         branch_name:
           type: string
         git_branch:
           type: string
+        persistent:
+          type: boolean
         region:
           type: string
       required:
         - branch_name
+    ValidationRecord:
+      type: object
+      properties:
+        txt_name:
+          type: string
+        txt_value:
+          type: string
+      required:
+        - txt_name
+        - txt_value
+    ValidationError:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+    SslValidation:
+      type: object
+      properties:
+        status:
+          type: string
+        validation_records:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationRecord'
+        validation_errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+      required:
+        - status
+        - validation_records
+    OwnershipVerification:
+      type: object
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        value:
+          type: string
+      required:
+        - type
+        - name
+        - value
+    CustomHostnameDetails:
+      type: object
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        ssl:
+          $ref: '#/components/schemas/SslValidation'
+        ownership_verification:
+          $ref: '#/components/schemas/OwnershipVerification'
+        custom_origin_server:
+          type: string
+        verification_errors:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+      required:
+        - id
+        - hostname
+        - ssl
+        - ownership_verification
+        - custom_origin_server
+        - status
+    CfResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: object
+        messages:
+          type: array
+          items:
+            type: object
+        result:
+          $ref: '#/components/schemas/CustomHostnameDetails'
+      required:
+        - success
+        - errors
+        - messages
+        - result
     UpdateCustomHostnameResponse:
       type: object
       properties:
@@ -2550,7 +3253,7 @@ components:
         custom_hostname:
           type: string
         data:
-          type: object
+          $ref: '#/components/schemas/CfResponse'
       required:
         - status
         - custom_hostname
@@ -2631,6 +3334,12 @@ components:
       properties:
         max_rows:
           type: integer
+        db_pool:
+          type: integer
+          nullable: true
+          description: >-
+            If `null`, the value is automatically configured based on compute
+            size.
         db_schema:
           type: string
         db_extra_search_path:
@@ -2639,6 +3348,7 @@ components:
           type: string
       required:
         - max_rows
+        - db_pool
         - db_schema
         - db_extra_search_path
     UpdatePostgrestConfigBody:
@@ -2648,28 +3358,40 @@ components:
           type: integer
           minimum: 0
           maximum: 1000000
+        db_pool:
+          type: integer
+          minimum: 0
+          maximum: 1000
         db_extra_search_path:
           type: string
         db_schema:
           type: string
-    PostgrestConfigResponse:
+    V1PostgrestConfigResponse:
       type: object
       properties:
         max_rows:
           type: integer
+        db_pool:
+          type: integer
+          nullable: true
+          description: >-
+            If `null`, the value is automatically configured based on compute
+            size.
         db_schema:
           type: string
         db_extra_search_path:
           type: string
       required:
         - max_rows
+        - db_pool
         - db_schema
         - db_extra_search_path
-    ProjectRefResponse:
+    V1ProjectRefResponse:
       type: object
       properties:
         id:
-          type: number
+          type: integer
+          format: int64
         ref:
           type: string
         name:
@@ -2771,9 +3493,12 @@ components:
     UpgradeDatabaseBody:
       type: object
       properties:
+        release_channel:
+          $ref: '#/components/schemas/ReleaseChannel'
         target_version:
-          type: number
+          type: string
       required:
+        - release_channel
         - target_version
     ProjectUpgradeInitiateResponse:
       type: object
@@ -2786,15 +3511,22 @@ components:
       type: object
       properties:
         postgres_version:
-          type: number
+          $ref: '#/components/schemas/PostgresEngine'
+        release_channel:
+          $ref: '#/components/schemas/ReleaseChannel'
         app_version:
           type: string
       required:
         - postgres_version
+        - release_channel
         - app_version
     ProjectUpgradeEligibilityResponse:
       type: object
       properties:
+        current_app_version_release_channel:
+          $ref: '#/components/schemas/ReleaseChannel'
+        duration_estimate_hours:
+          type: integer
         eligible:
           type: boolean
         current_app_version:
@@ -2809,8 +3541,6 @@ components:
           type: array
           items:
             type: string
-        duration_estimate_hours:
-          type: number
         legacy_auth_custom_roles:
           type: array
           items:
@@ -2820,21 +3550,30 @@ components:
           items:
             type: string
       required:
+        - current_app_version_release_channel
+        - duration_estimate_hours
         - eligible
         - current_app_version
         - latest_app_version
         - target_upgrade_versions
         - potential_breaking_changes
-        - duration_estimate_hours
         - legacy_auth_custom_roles
         - extension_dependent_objects
     DatabaseUpgradeStatus:
       type: object
       properties:
+        target_version:
+          type: integer
+        status:
+          enum:
+            - 0
+            - 1
+            - 2
+          type: integer
         initiated_at:
           type: string
-        target_version:
-          type: number
+        latest_status_at:
+          type: string
         error:
           type: string
           enum:
@@ -2846,6 +3585,7 @@ components:
             - 6_volume_detachchment_from_original_instance_failed
             - 7_volume_attachment_to_upgraded_instance_failed
             - 8_upgrade_completion_failed
+            - 9_post_physical_backup_failed
         progress:
           type: string
           enum:
@@ -2859,16 +3599,12 @@ components:
             - 7_detached_volume_from_original_instance
             - 8_attached_volume_to_upgraded_instance
             - 9_completed_upgrade
-        status:
-          type: number
-          enum:
-            - 0
-            - 1
-            - 2
+            - 10_completed_post_physical_backup
       required:
-        - initiated_at
         - target_version
         - status
+        - initiated_at
+        - latest_status_at
     DatabaseUpgradeStatusResponse:
       type: object
       properties:
@@ -2898,6 +3634,7 @@ components:
           type: string
           enum:
             - us-east-1
+            - us-east-2
             - us-west-1
             - us-west-2
             - ap-east-1
@@ -2908,7 +3645,9 @@ components:
             - eu-west-1
             - eu-west-2
             - eu-west-3
+            - eu-north-1
             - eu-central-1
+            - eu-central-2
             - ca-central-1
             - ap-south-1
             - sa-east-1
@@ -2928,28 +3667,18 @@ components:
       properties:
         name:
           type: string
-        version:
-          type: string
-        description:
-          type: string
+          enum:
+            - GoTrue
       required:
         - name
-        - version
-        - description
     RealtimeHealthResponse:
       type: object
       properties:
-        healthy:
-          type: boolean
-        db_connected:
-          type: boolean
         connected_cluster:
-          type: number
+          type: integer
       required:
-        - healthy
-        - db_connected
         - connected_cluster
-    ServiceHealthResponse:
+    V1ServiceHealthResponse:
       type: object
       properties:
         info:
@@ -2979,12 +3708,47 @@ components:
         - name
         - healthy
         - status
+    StorageFeatureImageTransformation:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+      required:
+        - enabled
+    StorageFeatures:
+      type: object
+      properties:
+        imageTransformation:
+          $ref: '#/components/schemas/StorageFeatureImageTransformation'
+      required:
+        - imageTransformation
+    StorageConfigResponse:
+      type: object
+      properties:
+        fileSizeLimit:
+          type: integer
+          format: int64
+        features:
+          $ref: '#/components/schemas/StorageFeatures'
+      required:
+        - fileSizeLimit
+        - features
+    UpdateStorageConfigBody:
+      type: object
+      properties:
+        fileSizeLimit:
+          type: integer
+          minimum: 0
+          maximum: 53687091200
+          format: int64
+        features:
+          $ref: '#/components/schemas/StorageFeatures'
     PostgresConfigResponse:
       type: object
       properties:
-        statement_timeout:
-          type: string
         effective_cache_size:
+          type: string
+        logical_decoding_work_mem:
           type: string
         maintenance_work_mem:
           type: string
@@ -3008,11 +3772,31 @@ components:
           type: integer
           minimum: 0
           maximum: 1024
+        max_replication_slots:
+          type: integer
+        max_slot_wal_keep_size:
+          type: string
+        max_standby_archive_delay:
+          type: string
+        max_standby_streaming_delay:
+          type: string
+        max_wal_size:
+          type: string
+        max_wal_senders:
+          type: integer
         max_worker_processes:
           type: integer
           minimum: 0
           maximum: 262143
         shared_buffers:
+          type: string
+        statement_timeout:
+          type: string
+        track_commit_timestamp:
+          type: boolean
+        wal_keep_size:
+          type: string
+        wal_sender_timeout:
           type: string
         work_mem:
           type: string
@@ -3025,9 +3809,9 @@ components:
     UpdatePostgresConfigBody:
       type: object
       properties:
-        statement_timeout:
-          type: string
         effective_cache_size:
+          type: string
+        logical_decoding_work_mem:
           type: string
         maintenance_work_mem:
           type: string
@@ -3051,14 +3835,36 @@ components:
           type: integer
           minimum: 0
           maximum: 1024
+        max_replication_slots:
+          type: integer
+        max_slot_wal_keep_size:
+          type: string
+        max_standby_archive_delay:
+          type: string
+        max_standby_streaming_delay:
+          type: string
+        max_wal_size:
+          type: string
+        max_wal_senders:
+          type: integer
         max_worker_processes:
           type: integer
           minimum: 0
           maximum: 262143
         shared_buffers:
           type: string
+        statement_timeout:
+          type: string
+        track_commit_timestamp:
+          type: boolean
+        wal_keep_size:
+          type: string
+        wal_sender_timeout:
+          type: string
         work_mem:
           type: string
+        restart_database:
+          type: boolean
         session_replication_role:
           enum:
             - origin
@@ -3082,10 +3888,150 @@ components:
           type: number
         connection_string:
           type: string
+    SupavisorConfigResponse:
+      type: object
+      properties:
+        db_port:
+          type: integer
+        default_pool_size:
+          type: integer
+          nullable: true
+        max_client_conn:
+          type: integer
+          nullable: true
+        identifier:
+          type: string
+        database_type:
+          enum:
+            - PRIMARY
+            - READ_REPLICA
+          type: string
+        is_using_scram_auth:
+          type: boolean
+        db_user:
+          type: string
+        db_host:
+          type: string
+        db_name:
+          type: string
+        connectionString:
+          type: string
+        pool_mode:
+          enum:
+            - transaction
+            - session
+          type: string
+      required:
+        - db_port
+        - default_pool_size
+        - max_client_conn
+        - identifier
+        - database_type
+        - is_using_scram_auth
+        - db_user
+        - db_host
+        - db_name
+        - connectionString
+        - pool_mode
+    UpdateSupavisorConfigBody:
+      type: object
+      properties:
+        default_pool_size:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 1000
+        pool_mode:
+          enum:
+            - transaction
+            - session
+          type: string
+          deprecated: true
+          description: This field is deprecated and is ignored in this request
+    UpdateSupavisorConfigResponse:
+      type: object
+      properties:
+        default_pool_size:
+          type: integer
+          nullable: true
+        pool_mode:
+          enum:
+            - transaction
+            - session
+          type: string
+      required:
+        - default_pool_size
+        - pool_mode
     AuthConfigResponse:
       type: object
       properties:
+        api_max_request_duration:
+          type: integer
+          nullable: true
+        db_max_pool_size:
+          type: integer
+          nullable: true
+        jwt_exp:
+          type: integer
+          nullable: true
+        mailer_otp_exp:
+          type: integer
+        mailer_otp_length:
+          type: integer
+          nullable: true
+        mfa_max_enrolled_factors:
+          type: integer
+          nullable: true
+        mfa_phone_otp_length:
+          type: integer
+        mfa_phone_max_frequency:
+          type: integer
+          nullable: true
+        password_min_length:
+          type: integer
+          nullable: true
+        rate_limit_anonymous_users:
+          type: integer
+          nullable: true
+        rate_limit_email_sent:
+          type: integer
+          nullable: true
+        rate_limit_sms_sent:
+          type: integer
+          nullable: true
+        rate_limit_token_refresh:
+          type: integer
+          nullable: true
+        rate_limit_verify:
+          type: integer
+          nullable: true
+        rate_limit_otp:
+          type: integer
+          nullable: true
+        security_refresh_token_reuse_interval:
+          type: integer
+          nullable: true
+        sessions_inactivity_timeout:
+          type: integer
+          nullable: true
+        sessions_timebox:
+          type: integer
+          nullable: true
+        sms_max_frequency:
+          type: integer
+          nullable: true
+        sms_otp_exp:
+          type: integer
+          nullable: true
+        sms_otp_length:
+          type: integer
+        smtp_max_frequency:
+          type: integer
+          nullable: true
         disable_signup:
+          type: boolean
+          nullable: true
+        external_anonymous_users_enabled:
           type: boolean
           nullable: true
         external_apple_additional_client_ids:
@@ -3217,6 +4163,15 @@ components:
         external_linkedin_oidc_secret:
           type: string
           nullable: true
+        external_slack_oidc_client_id:
+          type: string
+          nullable: true
+        external_slack_oidc_enabled:
+          type: boolean
+          nullable: true
+        external_slack_oidc_secret:
+          type: string
+          nullable: true
         external_notion_client_id:
           type: string
           nullable: true
@@ -3292,10 +4247,16 @@ components:
         hook_custom_access_token_uri:
           type: string
           nullable: true
+        hook_custom_access_token_secrets:
+          type: string
+          nullable: true
         hook_mfa_verification_attempt_enabled:
           type: boolean
           nullable: true
         hook_mfa_verification_attempt_uri:
+          type: string
+          nullable: true
+        hook_mfa_verification_attempt_secrets:
           type: string
           nullable: true
         hook_password_verification_attempt_enabled:
@@ -3304,17 +4265,32 @@ components:
         hook_password_verification_attempt_uri:
           type: string
           nullable: true
-        jwt_exp:
-          type: number
+        hook_password_verification_attempt_secrets:
+          type: string
+          nullable: true
+        hook_send_sms_enabled:
+          type: boolean
+          nullable: true
+        hook_send_sms_uri:
+          type: string
+          nullable: true
+        hook_send_sms_secrets:
+          type: string
+          nullable: true
+        hook_send_email_enabled:
+          type: boolean
+          nullable: true
+        hook_send_email_uri:
+          type: string
+          nullable: true
+        hook_send_email_secrets:
+          type: string
           nullable: true
         mailer_allow_unverified_email_sign_ins:
           type: boolean
           nullable: true
         mailer_autoconfirm:
           type: boolean
-          nullable: true
-        mailer_otp_exp:
-          type: number
           nullable: true
         mailer_secure_email_change_enabled:
           type: boolean
@@ -3329,6 +4305,9 @@ components:
           type: string
           nullable: true
         mailer_subjects_magic_link:
+          type: string
+          nullable: true
+        mailer_subjects_reauthentication:
           type: string
           nullable: true
         mailer_subjects_recovery:
@@ -3346,37 +4325,49 @@ components:
         mailer_templates_magic_link_content:
           type: string
           nullable: true
+        mailer_templates_reauthentication_content:
+          type: string
+          nullable: true
         mailer_templates_recovery_content:
           type: string
           nullable: true
-        mfa_max_enrolled_factors:
-          type: number
+        mfa_totp_enroll_enabled:
+          type: boolean
+          nullable: true
+        mfa_totp_verify_enabled:
+          type: boolean
+          nullable: true
+        mfa_phone_enroll_enabled:
+          type: boolean
+          nullable: true
+        mfa_phone_verify_enabled:
+          type: boolean
+          nullable: true
+        mfa_web_authn_enroll_enabled:
+          type: boolean
+          nullable: true
+        mfa_web_authn_verify_enabled:
+          type: boolean
+          nullable: true
+        mfa_phone_template:
+          type: string
           nullable: true
         password_hibp_enabled:
           type: boolean
           nullable: true
-        password_min_length:
-          type: number
-          nullable: true
         password_required_characters:
           type: string
-          nullable: true
-        rate_limit_email_sent:
-          type: number
-          nullable: true
-        rate_limit_sms_sent:
-          type: number
-          nullable: true
-        rate_limit_token_refresh:
-          type: number
-          nullable: true
-        rate_limit_verify:
-          type: number
           nullable: true
         refresh_token_rotation_enabled:
           type: boolean
           nullable: true
         saml_enabled:
+          type: boolean
+          nullable: true
+        saml_external_url:
+          type: string
+          nullable: true
+        saml_allow_encrypted_assertions:
           type: boolean
           nullable: true
         security_captcha_enabled:
@@ -3391,14 +4382,8 @@ components:
         security_manual_linking_enabled:
           type: boolean
           nullable: true
-        security_refresh_token_reuse_interval:
-          type: number
-          nullable: true
         security_update_password_require_reauthentication:
           type: boolean
-          nullable: true
-        sessions_inactivity_timeout:
-          type: number
           nullable: true
         sessions_single_per_user:
           type: boolean
@@ -3406,29 +4391,17 @@ components:
         sessions_tags:
           type: string
           nullable: true
-        sessions_timebox:
-          type: number
-          nullable: true
         site_url:
           type: string
           nullable: true
         sms_autoconfirm:
           type: boolean
           nullable: true
-        sms_max_frequency:
-          type: number
-          nullable: true
         sms_messagebird_access_key:
           type: string
           nullable: true
         sms_messagebird_originator:
           type: string
-          nullable: true
-        sms_otp_exp:
-          type: number
-          nullable: true
-        sms_otp_length:
-          type: number
           nullable: true
         sms_provider:
           type: string
@@ -3484,9 +4457,6 @@ components:
         smtp_host:
           type: string
           nullable: true
-        smtp_max_frequency:
-          type: number
-          nullable: true
         smtp_pass:
           type: string
           nullable: true
@@ -3503,7 +4473,30 @@ components:
           type: string
           nullable: true
       required:
+        - api_max_request_duration
+        - db_max_pool_size
+        - jwt_exp
+        - mailer_otp_exp
+        - mailer_otp_length
+        - mfa_max_enrolled_factors
+        - mfa_phone_otp_length
+        - mfa_phone_max_frequency
+        - password_min_length
+        - rate_limit_anonymous_users
+        - rate_limit_email_sent
+        - rate_limit_sms_sent
+        - rate_limit_token_refresh
+        - rate_limit_verify
+        - rate_limit_otp
+        - security_refresh_token_reuse_interval
+        - sessions_inactivity_timeout
+        - sessions_timebox
+        - sms_max_frequency
+        - sms_otp_exp
+        - sms_otp_length
+        - smtp_max_frequency
         - disable_signup
+        - external_anonymous_users_enabled
         - external_apple_additional_client_ids
         - external_apple_client_id
         - external_apple_enabled
@@ -3547,6 +4540,9 @@ components:
         - external_linkedin_oidc_client_id
         - external_linkedin_oidc_enabled
         - external_linkedin_oidc_secret
+        - external_slack_oidc_client_id
+        - external_slack_oidc_enabled
+        - external_slack_oidc_secret
         - external_notion_client_id
         - external_notion_enabled
         - external_notion_secret
@@ -3572,52 +4568,58 @@ components:
         - external_zoom_secret
         - hook_custom_access_token_enabled
         - hook_custom_access_token_uri
+        - hook_custom_access_token_secrets
         - hook_mfa_verification_attempt_enabled
         - hook_mfa_verification_attempt_uri
+        - hook_mfa_verification_attempt_secrets
         - hook_password_verification_attempt_enabled
         - hook_password_verification_attempt_uri
-        - jwt_exp
+        - hook_password_verification_attempt_secrets
+        - hook_send_sms_enabled
+        - hook_send_sms_uri
+        - hook_send_sms_secrets
+        - hook_send_email_enabled
+        - hook_send_email_uri
+        - hook_send_email_secrets
         - mailer_allow_unverified_email_sign_ins
         - mailer_autoconfirm
-        - mailer_otp_exp
         - mailer_secure_email_change_enabled
         - mailer_subjects_confirmation
         - mailer_subjects_email_change
         - mailer_subjects_invite
         - mailer_subjects_magic_link
+        - mailer_subjects_reauthentication
         - mailer_subjects_recovery
         - mailer_templates_confirmation_content
         - mailer_templates_email_change_content
         - mailer_templates_invite_content
         - mailer_templates_magic_link_content
+        - mailer_templates_reauthentication_content
         - mailer_templates_recovery_content
-        - mfa_max_enrolled_factors
+        - mfa_totp_enroll_enabled
+        - mfa_totp_verify_enabled
+        - mfa_phone_enroll_enabled
+        - mfa_phone_verify_enabled
+        - mfa_web_authn_enroll_enabled
+        - mfa_web_authn_verify_enabled
+        - mfa_phone_template
         - password_hibp_enabled
-        - password_min_length
         - password_required_characters
-        - rate_limit_email_sent
-        - rate_limit_sms_sent
-        - rate_limit_token_refresh
-        - rate_limit_verify
         - refresh_token_rotation_enabled
         - saml_enabled
+        - saml_external_url
+        - saml_allow_encrypted_assertions
         - security_captcha_enabled
         - security_captcha_provider
         - security_captcha_secret
         - security_manual_linking_enabled
-        - security_refresh_token_reuse_interval
         - security_update_password_require_reauthentication
-        - sessions_inactivity_timeout
         - sessions_single_per_user
         - sessions_tags
-        - sessions_timebox
         - site_url
         - sms_autoconfirm
-        - sms_max_frequency
         - sms_messagebird_access_key
         - sms_messagebird_originator
-        - sms_otp_exp
-        - sms_otp_length
         - sms_provider
         - sms_template
         - sms_test_otp
@@ -3636,7 +4638,6 @@ components:
         - sms_vonage_from
         - smtp_admin_email
         - smtp_host
-        - smtp_max_frequency
         - smtp_pass
         - smtp_port
         - smtp_sender_name
@@ -3645,15 +4646,93 @@ components:
     UpdateAuthConfigBody:
       type: object
       properties:
+        jwt_exp:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        smtp_max_frequency:
+          type: integer
+          minimum: 0
+          maximum: 32767
+        mfa_max_enrolled_factors:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        sessions_timebox:
+          type: integer
+          minimum: 0
+        sessions_inactivity_timeout:
+          type: integer
+          minimum: 0
+        rate_limit_anonymous_users:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        rate_limit_email_sent:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        rate_limit_sms_sent:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        rate_limit_verify:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        rate_limit_token_refresh:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        rate_limit_otp:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        password_min_length:
+          type: integer
+          minimum: 6
+          maximum: 32767
+        security_refresh_token_reuse_interval:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        mailer_otp_exp:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        mailer_otp_length:
+          type: integer
+          minimum: 6
+          maximum: 10
+        sms_max_frequency:
+          type: integer
+          minimum: 0
+          maximum: 32767
+        sms_otp_exp:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+        sms_otp_length:
+          type: integer
+          minimum: 0
+          maximum: 32767
+        db_max_pool_size:
+          type: integer
+        api_max_request_duration:
+          type: integer
+        mfa_phone_max_frequency:
+          type: integer
+          minimum: 0
+          maximum: 32767
+        mfa_phone_otp_length:
+          type: integer
+          minimum: 0
+          maximum: 32767
         site_url:
           type: string
           pattern: /^[^,]+$/
         disable_signup:
           type: boolean
-        jwt_exp:
-          type: number
-          minimum: 0
-          maximum: 604800
         smtp_admin_email:
           type: string
         smtp_host:
@@ -3664,10 +4743,6 @@ components:
           type: string
         smtp_pass:
           type: string
-        smtp_max_frequency:
-          type: number
-          minimum: 0
-          maximum: 32767
         smtp_sender_name:
           type: string
         mailer_allow_unverified_email_sign_ins:
@@ -3684,6 +4759,8 @@ components:
           type: string
         mailer_subjects_magic_link:
           type: string
+        mailer_subjects_reauthentication:
+          type: string
         mailer_templates_invite_content:
           type: string
         mailer_templates_confirmation_content:
@@ -3694,61 +4771,38 @@ components:
           type: string
         mailer_templates_magic_link_content:
           type: string
-        mfa_max_enrolled_factors:
-          type: number
-          minimum: 0
-          maximum: 2147483647
+        mailer_templates_reauthentication_content:
+          type: string
         uri_allow_list:
           type: string
+        external_anonymous_users_enabled:
+          type: boolean
         external_email_enabled:
           type: boolean
         external_phone_enabled:
           type: boolean
         saml_enabled:
           type: boolean
+        saml_external_url:
+          type: string
+          pattern: /^[^,]+$/
         security_captcha_enabled:
           type: boolean
         security_captcha_provider:
           type: string
         security_captcha_secret:
           type: string
-        sessions_timebox:
-          type: number
-          minimum: 0
-        sessions_inactivity_timeout:
-          type: number
-          minimum: 0
         sessions_single_per_user:
           type: boolean
         sessions_tags:
           type: string
           pattern: /^\s*([a-z0-9_-]+(\s*,+\s*)?)*\s*$/i
-        rate_limit_email_sent:
-          type: number
-          minimum: 1
-          maximum: 2147483647
-        rate_limit_sms_sent:
-          type: number
-          minimum: 1
-          maximum: 2147483647
-        rate_limit_verify:
-          type: number
-          minimum: 1
-          maximum: 2147483647
-        rate_limit_token_refresh:
-          type: number
-          minimum: 1
-          maximum: 2147483647
         mailer_secure_email_change_enabled:
           type: boolean
         refresh_token_rotation_enabled:
           type: boolean
         password_hibp_enabled:
           type: boolean
-        password_min_length:
-          type: number
-          minimum: 6
-          maximum: 32767
         password_required_characters:
           type: string
           enum:
@@ -3760,28 +4814,8 @@ components:
           type: boolean
         security_update_password_require_reauthentication:
           type: boolean
-        security_refresh_token_reuse_interval:
-          type: number
-          minimum: 0
-          maximum: 2147483647
-        mailer_otp_exp:
-          type: number
-          minimum: 0
-          maximum: 2147483647
         sms_autoconfirm:
           type: boolean
-        sms_max_frequency:
-          type: number
-          minimum: 0
-          maximum: 32767
-        sms_otp_exp:
-          type: number
-          minimum: 0
-          maximum: 2147483647
-        sms_otp_length:
-          type: number
-          minimum: 0
-          maximum: 32767
         sms_provider:
           type: string
         sms_messagebird_access_key:
@@ -3823,13 +4857,31 @@ components:
           type: boolean
         hook_mfa_verification_attempt_uri:
           type: string
+        hook_mfa_verification_attempt_secrets:
+          type: string
         hook_password_verification_attempt_enabled:
           type: boolean
         hook_password_verification_attempt_uri:
           type: string
+        hook_password_verification_attempt_secrets:
+          type: string
         hook_custom_access_token_enabled:
           type: boolean
         hook_custom_access_token_uri:
+          type: string
+        hook_custom_access_token_secrets:
+          type: string
+        hook_send_sms_enabled:
+          type: boolean
+        hook_send_sms_uri:
+          type: string
+        hook_send_sms_secrets:
+          type: string
+        hook_send_email_enabled:
+          type: boolean
+        hook_send_email_uri:
+          type: string
+        hook_send_email_secrets:
           type: string
         external_apple_enabled:
           type: boolean
@@ -3915,6 +4967,12 @@ components:
           type: string
         external_linkedin_oidc_secret:
           type: string
+        external_slack_oidc_enabled:
+          type: boolean
+        external_slack_oidc_client_id:
+          type: string
+        external_slack_oidc_secret:
+          type: string
         external_notion_enabled:
           type: boolean
         external_notion_client_id:
@@ -3959,14 +5017,68 @@ components:
           type: string
         external_zoom_secret:
           type: string
-    RunQueryBody:
+        mfa_totp_enroll_enabled:
+          type: boolean
+        mfa_totp_verify_enabled:
+          type: boolean
+        mfa_web_authn_enroll_enabled:
+          type: boolean
+        mfa_web_authn_verify_enabled:
+          type: boolean
+        mfa_phone_enroll_enabled:
+          type: boolean
+        mfa_phone_verify_enabled:
+          type: boolean
+        mfa_phone_template:
+          type: string
+    CreateThirdPartyAuthBody:
+      type: object
+      properties:
+        oidc_issuer_url:
+          type: string
+        jwks_url:
+          type: string
+        custom_jwks:
+          type: object
+    ThirdPartyAuth:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        oidc_issuer_url:
+          type: string
+          nullable: true
+        jwks_url:
+          type: string
+          nullable: true
+        custom_jwks:
+          type: object
+          nullable: true
+        resolved_jwks:
+          type: object
+          nullable: true
+        inserted_at:
+          type: string
+        updated_at:
+          type: string
+        resolved_at:
+          type: string
+          nullable: true
+      required:
+        - id
+        - type
+        - inserted_at
+        - updated_at
+    V1RunQueryBody:
       type: object
       properties:
         query:
           type: string
       required:
         - query
-    CreateFunctionBody:
+    V1CreateFunctionBody:
       type: object
       properties:
         slug:
@@ -3985,6 +5097,14 @@ components:
     FunctionResponse:
       type: object
       properties:
+        version:
+          type: integer
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
         id:
           type: string
         slug:
@@ -3997,12 +5117,6 @@ components:
             - REMOVED
             - THROTTLED
           type: string
-        version:
-          type: number
-        created_at:
-          type: number
-        updated_at:
-          type: number
         verify_jwt:
           type: boolean
         import_map:
@@ -4012,16 +5126,24 @@ components:
         import_map_path:
           type: string
       required:
+        - version
+        - created_at
+        - updated_at
         - id
         - slug
         - name
         - status
-        - version
-        - created_at
-        - updated_at
     FunctionSlugResponse:
       type: object
       properties:
+        version:
+          type: integer
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
         id:
           type: string
         slug:
@@ -4034,12 +5156,6 @@ components:
             - REMOVED
             - THROTTLED
           type: string
-        version:
-          type: number
-        created_at:
-          type: number
-        updated_at:
-          type: number
         verify_jwt:
           type: boolean
         import_map:
@@ -4049,14 +5165,14 @@ components:
         import_map_path:
           type: string
       required:
+        - version
+        - created_at
+        - updated_at
         - id
         - slug
         - name
         - status
-        - version
-        - created_at
-        - updated_at
-    UpdateFunctionBody:
+    V1UpdateFunctionBody:
       type: object
       properties:
         name:
@@ -4102,6 +5218,8 @@ components:
           type: array
           items:
             type: string
+        array:
+          type: boolean
     AttributeMapping:
       type: object
       properties:
@@ -4278,6 +5396,7 @@ components:
             - PENDING
             - REMOVED
             - ARCHIVED
+            - CANCELLED
         is_physical_backup:
           type: boolean
         inserted_at:
@@ -4286,13 +5405,15 @@ components:
         - status
         - is_physical_backup
         - inserted_at
-    PhysicalBackup:
+    V1PhysicalBackup:
       type: object
       properties:
         earliest_physical_backup_date_unix:
-          type: number
+          type: integer
+          format: int64
         latest_physical_backup_date_unix:
-          type: number
+          type: integer
+          format: int64
     V1BackupsResponse:
       type: object
       properties:
@@ -4307,7 +5428,7 @@ components:
           items:
             $ref: '#/components/schemas/V1Backup'
         physical_backup_data:
-          $ref: '#/components/schemas/PhysicalBackup'
+          $ref: '#/components/schemas/V1PhysicalBackup'
       required:
         - region
         - walg_enabled
@@ -4318,7 +5439,9 @@ components:
       type: object
       properties:
         recovery_time_target_unix:
-          type: number
+          type: integer
+          minimum: 0
+          format: int64
       required:
         - recovery_time_target_unix
     V1OrganizationMemberResponse:
@@ -4357,12 +5480,16 @@ components:
             type: string
             enum:
               - AI_SQL_GENERATOR_OPT_IN
-              - PREVIEW_BRANCHES_OPT_IN
+        allowed_release_channels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReleaseChannel'
         id:
           type: string
         name:
           type: string
       required:
         - opt_in_tags
+        - allowed_release_channels
         - id
         - name

@@ -31,6 +31,10 @@ func main() {
 	if len(os.Args) > 1 {
 		semver = os.Args[1]
 	}
+	// Trim version tag
+	if semver[0] == 'v' {
+		semver = semver[1:]
+	}
 
 	if err := generate(semver); err != nil {
 		log.Fatalln(err)
@@ -181,7 +185,7 @@ func GenYamlDoc(cmd *cobra.Command, root *SpecDoc) CmdDoc {
 		Subcommands: subcommands,
 	}
 
-	names := strings.Split(cmd.CommandPath(), " ")
+	names := strings.Fields(cmd.CommandPath())
 	if len(names) > 3 {
 		base := strings.Join(names[2:], "-")
 		names = append(names[:2], base)

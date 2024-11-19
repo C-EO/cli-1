@@ -1,25 +1,28 @@
 package login
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strconv"
+	"os/user"
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/go-errors/errors"
+	"github.com/google/uuid"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/migration/new"
 	"github.com/supabase/cli/internal/utils"
-	"github.com/supabase/cli/internal/utils/credentials"
+	"github.com/supabase/cli/pkg/fetcher"
 )
 
 type RunParams struct {
@@ -39,7 +42,6 @@ type AccessTokenResponse struct {
 	Nonce       string `json:"nonce"`
 }
 
-const defaultRetryAfterSeconds = 2
 const decryptionErrorMsg = "cannot decrypt access token"
 
 var loggedInMsg = "You are now logged in. " + utils.Aqua("Happy coding!")
@@ -123,113 +125,137 @@ func (enc LoginEncryption) decryptAccessToken(accessToken string, publicKey stri
 	return string(decryptedAccessToken), nil
 }
 
+const maxRetries = 2
+
 func pollForAccessToken(ctx context.Context, url string) (AccessTokenResponse, error) {
-	var accessTokenResponse AccessTokenResponse
-
 	// TODO: Move to OpenAPI-generated http client once we reach v1 on API schema.
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return accessTokenResponse, errors.Errorf("cannot fetch access token: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return accessTokenResponse, errors.Errorf("cannot fetch access token: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		retryAfterSeconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	client := fetcher.NewFetcher(
+		utils.GetSupabaseAPIHost(),
+		fetcher.WithHTTPClient(&http.Client{
+			Timeout: 10 * time.Second,
+		}),
+		fetcher.WithExpectedStatus(http.StatusOK),
+	)
+	console := utils.NewConsole()
+	probe := func() (AccessTokenResponse, error) {
+		// TODO: support automatic login flow
+		deviceCode, err := console.PromptText(ctx, "Enter your verification code: ")
 		if err != nil {
-			retryAfterSeconds = defaultRetryAfterSeconds
+			return AccessTokenResponse{}, err
 		}
-		t := time.NewTimer(time.Duration(retryAfterSeconds) * time.Second)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-		case <-t.C:
-		}
-		return pollForAccessToken(ctx, url)
-	}
-
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-
+		urlWithQuery := fmt.Sprintf("%s?device_code=%s", url, deviceCode)
+		resp, err := client.Send(ctx, http.MethodGet, urlWithQuery, nil)
 		if err != nil {
-			return accessTokenResponse, errors.Errorf("cannot read access token response body: %w", err)
+			return AccessTokenResponse{}, err
 		}
-
-		if err := json.Unmarshal(body, &accessTokenResponse); err != nil {
-			return accessTokenResponse, errors.Errorf("cannot unmarshal access token response: %w", err)
-		}
-
-		return accessTokenResponse, nil
+		return fetcher.ParseJSON[AccessTokenResponse](resp.Body)
 	}
-
-	return accessTokenResponse, errors.Errorf("HTTP %s: cannot retrieve access token", resp.Status)
+	policy := backoff.WithContext(backoff.WithMaxRetries(&backoff.ZeroBackOff{}, maxRetries), ctx)
+	return backoff.RetryNotifyWithData(probe, policy, newErrorCallback())
 }
 
-func Run(ctx context.Context, stdout *os.File, params RunParams) error {
+func newErrorCallback() backoff.Notify {
+	failureCount := 0
+	return func(err error, d time.Duration) {
+		failureCount += 1
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "Retry (%d/%d): ", failureCount, maxRetries)
+	}
+}
+
+func Run(ctx context.Context, stdout io.Writer, params RunParams) error {
 	if params.Token != "" {
-		err := utils.SaveAccessToken(params.Token, params.Fsys)
-		if err != nil {
+		if err := utils.SaveAccessToken(params.Token, params.Fsys); err != nil {
 			return errors.Errorf("cannot save provided token: %w", err)
 		}
 		fmt.Println(loggedInMsg)
 		return nil
 	}
 
-	if params.OpenBrowser {
-		fmt.Fprint(stdout, "Hello from ", utils.Aqua("Supabase"), "! Press ", utils.Aqua("Enter"), " to open browser and login automatically.\n")
-		fmt.Scanln()
+	// Initialise login encryption and Session ID for end-to-end communication.
+	if params.Encryption == nil {
+		var err error
+		if params.Encryption, err = NewLoginEncryption(); err != nil {
+			return err
+		}
+		params.SessionId = uuid.New().String()
 	}
 
-	tokenName := params.TokenName
-	encodedPublicKey := params.Encryption.encodedPublicKey()
+	// Initialise default token name
+	if params.TokenName == "" {
+		params.TokenName = generateTokenNameWithFallback()
+	}
 
+	encodedPublicKey := params.Encryption.encodedPublicKey()
 	createLoginSessionPath := "/cli/login"
-	createLoginSessionQuery := "?session_id=" + params.SessionId + "&token_name=" + tokenName + "&public_key=" + encodedPublicKey
+	createLoginSessionQuery := "?session_id=" + params.SessionId + "&token_name=" + params.TokenName + "&public_key=" + encodedPublicKey
 	createLoginSessionUrl := utils.GetSupabaseDashboardURL() + createLoginSessionPath + createLoginSessionQuery
 
 	if params.OpenBrowser {
+		fmt.Fprintf(stdout, "Hello from %s! Press %s to open browser and login automatically.\n", utils.Aqua("Supabase"), utils.Aqua("Enter"))
+		if _, err := fmt.Scanln(); err != nil {
+			return errors.Errorf("failed to scan line: %w", err)
+		}
 		fmt.Fprintf(stdout, "Here is your login link in case browser did not open %s\n\n", utils.Bold(createLoginSessionUrl))
-
 		if err := RunOpenCmd(ctx, createLoginSessionUrl); err != nil {
-			return errors.Errorf("cannot open default browser: %w", err)
+			fmt.Fprintln(os.Stderr, err)
 		}
 	} else {
 		fmt.Fprintf(stdout, "Here is your login link, open it in the browser %s\n\n", utils.Bold(createLoginSessionUrl))
 	}
 
-	err := utils.RunProgram(ctx, func(p utils.Program, ctx context.Context) error {
-		p.Send(utils.StatusMsg("Your token is now being generated and securely encrypted. Waiting for it to arrive..."))
-
-		sessionPollingUrl := utils.GetSupabaseAPIHost() + "/platform/cli/login/" + params.SessionId
-		accessTokenResponse, err := pollForAccessToken(ctx, sessionPollingUrl)
-		if err != nil {
-			return err
-		}
-
-		decryptedAccessToken, err := params.Encryption.decryptAccessToken(accessTokenResponse.AccessToken, accessTokenResponse.PublicKey, accessTokenResponse.Nonce)
-		if err != nil {
-			return err
-		}
-
-		return utils.SaveAccessToken(decryptedAccessToken, params.Fsys)
-	})
-
+	sessionPollingUrl := "/platform/cli/login/" + params.SessionId
+	accessTokenResponse, err := pollForAccessToken(ctx, sessionPollingUrl)
 	if err != nil {
 		return err
 	}
+	decryptedAccessToken, err := params.Encryption.decryptAccessToken(accessTokenResponse.AccessToken, accessTokenResponse.PublicKey, accessTokenResponse.Nonce)
+	if err != nil {
+		return err
+	}
+	if err := utils.SaveAccessToken(decryptedAccessToken, params.Fsys); err != nil {
+		return err
+	}
 
-	fmt.Fprintf(stdout, "Token %s created successfully.\n\n", utils.Bold(tokenName))
+	fmt.Fprintf(stdout, "Token %s created successfully.\n\n", utils.Bold(params.TokenName))
 	fmt.Fprintln(stdout, loggedInMsg)
 
 	return nil
 }
 
-func PromptAccessToken(stdin *os.File) string {
-	fmt.Fprintf(os.Stderr, `You can generate an access token from %s/account/tokens
-Enter your access token: `, utils.GetSupabaseDashboardURL())
-	input := credentials.PromptMasked(stdin)
-	return strings.TrimSpace(input)
+func ParseAccessToken(stdin afero.File) string {
+	// Not using viper so we can reset env easily in tests
+	token := os.Getenv("SUPABASE_ACCESS_TOKEN")
+	if len(token) == 0 {
+		var buf bytes.Buffer
+		if err := new.CopyStdinIfExists(stdin, &buf); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		token = strings.TrimSpace(buf.String())
+	}
+	return token
+}
+
+func generateTokenName() (string, error) {
+	user, err := user.Current()
+	if err != nil {
+		return "", errors.Errorf("cannot retrieve username: %w", err)
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", errors.Errorf("cannot retrieve hostname: %w", err)
+	}
+
+	return fmt.Sprintf("cli_%s@%s_%d", user.Username, hostname, time.Now().Unix()), nil
+}
+
+func generateTokenNameWithFallback() string {
+	name, err := generateTokenName()
+	if err != nil {
+		logger := utils.GetDebugLogger()
+		fmt.Fprintln(logger, err)
+		name = fmt.Sprintf("cli_%d", time.Now().Unix())
+	}
+	return name
 }

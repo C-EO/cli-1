@@ -3,29 +3,28 @@ package diff
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types"
+	"github.com/h2non/gock"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/supabase/cli/internal/db/reset"
 	"github.com/supabase/cli/internal/db/start"
-	"github.com/supabase/cli/internal/migration/history"
 	"github.com/supabase/cli/internal/testing/apitest"
 	"github.com/supabase/cli/internal/testing/fstest"
-	"github.com/supabase/cli/internal/testing/pgtest"
+	"github.com/supabase/cli/internal/testing/helper"
 	"github.com/supabase/cli/internal/utils"
-	"gopkg.in/h2non/gock.v1"
+	"github.com/supabase/cli/pkg/config"
+	"github.com/supabase/cli/pkg/migration"
+	"github.com/supabase/cli/pkg/pgtest"
 )
 
 var dbConfig = pgconn.Config{
@@ -46,7 +45,7 @@ func TestRun(t *testing.T) {
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg15Image), "test-shadow-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
 			Reply(http.StatusOK)
@@ -56,14 +55,16 @@ func TestRun(t *testing.T) {
 			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
 				State: &types.ContainerState{
 					Running: true,
-					Health:  &types.Health{Status: "healthy"},
+					Health:  &types.Health{Status: types.Healthy},
 				},
 			}})
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.GotrueImage), "test-shadow-auth")
-		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-shadow-auth", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StorageImage), "test-shadow-storage")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Realtime.Image), "test-shadow-realtime")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-shadow-realtime", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.Image), "test-shadow-storage")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-shadow-storage", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.MigraImage), "test-migra")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Auth.Image), "test-shadow-auth")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-shadow-auth", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(config.MigraImage), "test-migra")
 		diff := "create table test();"
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-migra", diff))
 		// Setup mock postgres
@@ -102,7 +103,7 @@ func TestRun(t *testing.T) {
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(strings.ReplaceAll(reset.LIST_SCHEMAS, "$1", `'{auth,pgbouncer,realtime,"\\_realtime",storage,"\\_analytics","supabase\\_functions","supabase\\_migrations","information\\_schema","pg\\_%",cron,graphql,"graphql\\_public",net,pgsodium,"pgsodium\\_masks",pgtle,repack,tiger,"tiger\\_data","timescaledb\\_%","\\_timescaledb\\_%",topology,vault}'`)).
+		conn.Query(migration.ListSchemas, migration.ManagedSchemas).
 			ReplyError(pgerrcode.DuplicateTable, `relation "test" already exists`)
 		// Run test
 		err := Run(context.Background(), []string{}, "", dbConfig, DiffSchemaMigra, fsys, conn.Intercept)
@@ -120,7 +121,7 @@ func TestRun(t *testing.T) {
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
 		gock.New(utils.Docker.DaemonHost()).
-			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.Pg15Image) + "/json").
+			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.Config.Db.Image) + "/json").
 			ReplyError(errors.New("network error"))
 		// Run test
 		err := Run(context.Background(), []string{"public"}, "file", dbConfig, DiffSchemaMigra, fsys)
@@ -136,7 +137,7 @@ func TestMigrateShadow(t *testing.T) {
 	t.Run("migrates shadow database", func(t *testing.T) {
 		utils.Config.Db.ShadowPort = 54320
 		utils.GlobalsSql = "create schema public"
-		utils.InitialSchemaSql = "create schema private"
+		utils.InitialSchemaPg14Sql = "create schema private"
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
 		path := filepath.Join(utils.MigrationsDir, "0_test.sql")
@@ -147,12 +148,12 @@ func TestMigrateShadow(t *testing.T) {
 		defer conn.Close(t)
 		conn.Query(utils.GlobalsSql).
 			Reply("CREATE SCHEMA").
-			Query(utils.InitialSchemaSql).
-			Reply("CREATE SCHEMA").
-			Query(sql).
+			Query(utils.InitialSchemaPg14Sql).
 			Reply("CREATE SCHEMA")
-		pgtest.MockMigrationHistory(conn)
-		conn.Query(history.INSERT_MIGRATION_VERSION, "0", "test", fmt.Sprintf("{%s}", sql)).
+		helper.MockMigrationHistory(conn).
+			Query(sql).
+			Reply("CREATE SCHEMA").
+			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
 			Reply("INSERT 0 1")
 		// Run test
 		err := MigrateShadowDatabase(context.Background(), "test-shadow-db", fsys, conn.Intercept)
@@ -201,10 +202,9 @@ func TestMigrateShadow(t *testing.T) {
 
 func TestDiffDatabase(t *testing.T) {
 	utils.Config.Db.MajorVersion = 14
-	utils.Config.Db.Image = utils.Pg14Image
 	utils.Config.Db.ShadowPort = 54320
 	utils.GlobalsSql = "create schema public"
-	utils.InitialSchemaSql = "create schema private"
+	utils.InitialSchemaPg14Sql = "create schema private"
 
 	t.Run("throws error on failure to create shadow", func(t *testing.T) {
 		// Setup in-memory fs
@@ -213,7 +213,7 @@ func TestDiffDatabase(t *testing.T) {
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
 		gock.New(utils.Docker.DaemonHost()).
-			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.Pg14Image) + "/json").
+			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.Config.Db.Image) + "/json").
 			ReplyError(errors.New("network error"))
 		// Run test
 		diff, err := DiffDatabase(context.Background(), []string{"public"}, dbConfig, io.Discard, fsys, DiffSchemaMigra)
@@ -230,9 +230,18 @@ func TestDiffDatabase(t *testing.T) {
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg14Image), "test-shadow-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: false,
+					Status:  "exited",
+				},
+			}})
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/logs").
 			Reply(http.StatusServiceUnavailable)
 		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
@@ -241,7 +250,7 @@ func TestDiffDatabase(t *testing.T) {
 		diff, err := DiffDatabase(context.Background(), []string{"public"}, dbConfig, io.Discard, fsys, DiffSchemaMigra)
 		// Check error
 		assert.Empty(t, diff)
-		assert.ErrorIs(t, err, start.ErrDatabase)
+		assert.ErrorContains(t, err, "test-shadow-db container is not running: exited")
 		assert.Empty(t, apitest.ListUnmatchedRequests())
 	})
 
@@ -251,14 +260,14 @@ func TestDiffDatabase(t *testing.T) {
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg14Image), "test-shadow-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
 			Reply(http.StatusOK).
 			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
 				State: &types.ContainerState{
 					Running: true,
-					Health:  &types.Health{Status: "healthy"},
+					Health:  &types.Health{Status: types.Healthy},
 				},
 			}})
 		gock.New(utils.Docker.DaemonHost()).
@@ -287,20 +296,20 @@ At statement 0: create schema public`)
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg14Image), "test-shadow-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
 			Reply(http.StatusOK).
 			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
 				State: &types.ContainerState{
 					Running: true,
-					Health:  &types.Health{Status: "healthy"},
+					Health:  &types.Health{Status: types.Healthy},
 				},
 			}})
 		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
 			Reply(http.StatusOK)
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.MigraImage), "test-migra")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(config.MigraImage), "test-migra")
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-migra/logs").
 			ReplyError(errors.New("network error"))
@@ -312,12 +321,12 @@ At statement 0: create schema public`)
 		defer conn.Close(t)
 		conn.Query(utils.GlobalsSql).
 			Reply("CREATE SCHEMA").
-			Query(utils.InitialSchemaSql).
-			Reply("CREATE SCHEMA").
-			Query(sql).
+			Query(utils.InitialSchemaPg14Sql).
 			Reply("CREATE SCHEMA")
-		pgtest.MockMigrationHistory(conn)
-		conn.Query(history.INSERT_MIGRATION_VERSION, "0", "test", fmt.Sprintf("{%s}", sql)).
+		helper.MockMigrationHistory(conn).
+			Query(sql).
+			Reply("CREATE SCHEMA").
+			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
 			Reply("INSERT 0 1")
 		// Run test
 		diff, err := DiffDatabase(context.Background(), []string{"public"}, dbConfig, io.Discard, fsys, DiffSchemaMigra, conn.Intercept)
@@ -326,24 +335,6 @@ At statement 0: create schema public`)
 		assert.ErrorContains(t, err, "error diffing schema")
 		assert.Empty(t, apitest.ListUnmatchedRequests())
 	})
-}
-
-func TestUserSchema(t *testing.T) {
-	// Setup mock postgres
-	conn := pgtest.NewConn()
-	defer conn.Close(t)
-	conn.Query(strings.ReplaceAll(reset.LIST_SCHEMAS, "$1", `'{auth,pgbouncer,realtime,"\\_realtime",storage,"\\_analytics","supabase\\_functions","supabase\\_migrations","information\\_schema","pg\\_%",cron,graphql,"graphql\\_public",net,pgsodium,"pgsodium\\_masks",pgtle,repack,tiger,"tiger\\_data","timescaledb\\_%","\\_timescaledb\\_%",topology,vault}'`)).
-		Reply("SELECT 1", []interface{}{"test"})
-	// Connect to mock
-	ctx := context.Background()
-	mock, err := utils.ConnectRemotePostgres(ctx, dbConfig, conn.Intercept)
-	require.NoError(t, err)
-	defer mock.Close(ctx)
-	// Run test
-	schemas, err := LoadUserSchemas(ctx, mock)
-	// Check error
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{"test"}, schemas)
 }
 
 func TestDropStatements(t *testing.T) {

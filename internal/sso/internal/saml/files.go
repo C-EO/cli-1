@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-errors/errors"
 	"github.com/spf13/afero"
 	"github.com/supabase/cli/pkg/api"
+	"github.com/supabase/cli/pkg/fetcher"
 )
 
 var DefaultClient = http.DefaultClient
@@ -63,26 +65,24 @@ func ValidateMetadataURL(ctx context.Context, metadataURL string) error {
 		return errors.Errorf("failed to parse metadata uri: %w", err)
 	}
 
-	if strings.ToLower(parsed.Scheme) != "https" {
+	if !strings.EqualFold(parsed.Scheme, "https") {
 		return errors.New("only HTTPS Metadata URLs are supported")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	client := fetcher.NewFetcher("",
+		fetcher.WithHTTPClient(&http.Client{
+			Timeout: 10 * time.Second,
+		}),
+		fetcher.WithRequestEditor(func(req *http.Request) {
+			req.Header.Add("Accept", "application/xml")
+		}),
+		fetcher.WithExpectedStatus(http.StatusOK),
+	)
+	resp, err := client.Send(ctx, http.MethodGet, metadataURL, nil)
 	if err != nil {
-		return errors.Errorf("failed to initialise http request: %w", err)
-	}
-
-	req.Header.Add("Accept", "application/xml")
-
-	resp, err := DefaultClient.Do(req)
-	if err != nil {
-		return errors.Errorf("failed to send http request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return errors.Errorf("received HTTP %v when fetching metatada at %q", resp.Status, metadataURL)
-	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
 	"github.com/supabase/cli/internal/utils"
+	cliConfig "github.com/supabase/cli/pkg/config"
 )
 
 const (
@@ -42,7 +43,7 @@ func Run(ctx context.Context, testFiles []string, config pgconn.Config, fsys afe
 		return errors.Errorf("failed to resolve absolute path: %w", err)
 	}
 	dstPath := "/tmp"
-	binds := []string{fmt.Sprintf("%s:%s:ro,z", srcPath, dstPath)}
+	binds := []string{fmt.Sprintf("%s:%s:ro", srcPath, dstPath)}
 	// Enable pgTAP if not already exists
 	alreadyExists := false
 	options = append(options, func(cc *pgx.ConnConfig) {
@@ -66,17 +67,19 @@ func Run(ctx context.Context, testFiles []string, config pgconn.Config, fsys afe
 		}()
 	}
 	// Use custom network when connecting to local database
-	networkID := "host"
+	// disable selinux via security-opt to allow pg-tap to work properly
+	hostConfig := container.HostConfig{Binds: binds, SecurityOpt: []string{"label:disable"}}
 	if utils.IsLocalDatabase(config) {
 		config.Host = utils.DbAliases[0]
 		config.Port = 5432
-		networkID = utils.NetId
+	} else {
+		hostConfig.NetworkMode = network.NetworkHost
 	}
 	// Run pg_prove on volume mount
 	return utils.DockerRunOnceWithConfig(
 		ctx,
 		container.Config{
-			Image: utils.PgProveImage,
+			Image: cliConfig.PgProveImage,
 			Env: []string{
 				"PGHOST=" + config.Host,
 				fmt.Sprintf("PGPORT=%d", config.Port),
@@ -87,10 +90,7 @@ func Run(ctx context.Context, testFiles []string, config pgconn.Config, fsys afe
 			Cmd:        cmd,
 			WorkingDir: dstPath,
 		},
-		container.HostConfig{
-			NetworkMode: container.NetworkMode(networkID),
-			Binds:       binds,
-		},
+		hostConfig,
 		network.NetworkingConfig{},
 		"",
 		os.Stdout,

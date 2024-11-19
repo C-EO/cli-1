@@ -10,15 +10,18 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/h2non/gock"
 	"github.com/jackc/pgconn"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase/cli/internal/testing/apitest"
-	"github.com/supabase/cli/internal/testing/pgtest"
 	"github.com/supabase/cli/internal/utils"
-	"gopkg.in/h2non/gock.v1"
+	"github.com/supabase/cli/pkg/config"
+	"github.com/supabase/cli/pkg/pgtest"
+	"github.com/supabase/cli/pkg/storage"
 )
 
 func TestStartCommand(t *testing.T) {
@@ -61,16 +64,6 @@ func TestStartCommand(t *testing.T) {
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		gock.New("http:///var/run/docker.sock").
-			Head("/_ping").
-			Reply(http.StatusOK).
-			SetHeader("API-Version", utils.Docker.ClientVersion()).
-			SetHeader("OSType", "linux")
-		gock.New(utils.Docker.DaemonHost()).
-			Get("/_ping").
-			Reply(http.StatusOK).
-			SetHeader("API-Version", utils.Docker.ClientVersion()).
-			SetHeader("OSType", "linux")
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/containers").
 			Reply(http.StatusOK).
@@ -93,15 +86,14 @@ func TestDatabaseStart(t *testing.T) {
 		gock.New(utils.Docker.DaemonHost()).
 			Post("/v" + utils.Docker.ClientVersion() + "/networks/create").
 			Reply(http.StatusCreated).
-			JSON(types.NetworkCreateResponse{})
+			JSON(network.CreateResponse{})
 		// Caches all dependencies
-		utils.Config.Db.Image = utils.Pg15Image
 		imageUrl := utils.GetRegistryImageUrl(utils.Config.Db.Image)
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/images/" + imageUrl + "/json").
 			Reply(http.StatusOK).
 			JSON(types.ImageInspect{})
-		for _, image := range utils.ServiceImages {
+		for _, image := range config.ServiceImages {
 			service := utils.GetRegistryImageUrl(image)
 			gock.New(utils.Docker.DaemonHost()).
 				Get("/v" + utils.Docker.ClientVersion() + "/images/" + service + "/json").
@@ -117,41 +109,41 @@ func TestDatabaseStart(t *testing.T) {
 			Get("/v" + utils.Docker.ClientVersion() + "/volumes/" + utils.DbId).
 			Reply(http.StatusNotFound)
 		apitest.MockDockerStart(utils.Docker, imageUrl, utils.DbId)
-		utils.Config.Auth.Image = utils.GotrueImage
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.GotrueImage), "test-auth")
-		utils.Config.Storage.Image = utils.StorageImage
-		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-auth", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StorageImage), "test-storage")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Realtime.Image), "test-realtime")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-realtime", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.Image), "test-storage")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-storage", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Auth.Image), "test-auth")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-auth", ""))
 		// Start services
 		utils.KongId = "test-kong"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.KongImage), utils.KongId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Api.KongImage), utils.KongId)
 		utils.GotrueId = "test-gotrue"
 		utils.Config.Auth.EnableSignup = true
 		utils.Config.Auth.Email.EnableSignup = true
 		utils.Config.Auth.Email.DoubleConfirmChanges = true
 		utils.Config.Auth.Email.EnableConfirmations = true
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.GotrueImage), utils.GotrueId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Auth.Image), utils.GotrueId)
 		utils.InbucketId = "test-inbucket"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.InbucketImage), utils.InbucketId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Inbucket.Image), utils.InbucketId)
 		utils.RealtimeId = "test-realtime"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.RealtimeImage), utils.RealtimeId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Realtime.Image), utils.RealtimeId)
 		utils.RestId = "test-rest"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.PostgrestImage), utils.RestId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Api.Image), utils.RestId)
 		utils.StorageId = "test-storage"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StorageImage), utils.StorageId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.Image), utils.StorageId)
 		utils.ImgProxyId = "test-imgproxy"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.ImageProxyImage), utils.ImgProxyId)
-		utils.DifferId = "test-differ"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.DifferImage), utils.DifferId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.ImageTransformation.Image), utils.ImgProxyId)
 		utils.EdgeRuntimeId = "test-edge-runtime"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.EdgeRuntimeImage), utils.EdgeRuntimeId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.EdgeRuntime.Image), utils.EdgeRuntimeId)
 		utils.PgmetaId = "test-pgmeta"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.PgmetaImage), utils.PgmetaId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Studio.PgmetaImage), utils.PgmetaId)
 		utils.StudioId = "test-studio"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StudioImage), utils.StudioId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Studio.Image), utils.StudioId)
 		utils.LogflareId = "test-logflare"
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.LogflareImage), utils.LogflareId)
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Analytics.Image), utils.LogflareId)
+		utils.VectorId = "test-vector"
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Analytics.VectorImage), utils.VectorId)
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
@@ -159,7 +151,7 @@ func TestDatabaseStart(t *testing.T) {
 		started := []string{
 			utils.DbId, utils.KongId, utils.GotrueId, utils.InbucketId, utils.RealtimeId,
 			utils.StorageId, utils.ImgProxyId, utils.EdgeRuntimeId, utils.PgmetaId, utils.StudioId,
-			utils.LogflareId, utils.RestId,
+			utils.LogflareId, utils.RestId, utils.VectorId,
 		}
 		for _, container := range started {
 			gock.New(utils.Docker.DaemonHost()).
@@ -168,16 +160,30 @@ func TestDatabaseStart(t *testing.T) {
 				JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
 					State: &types.ContainerState{
 						Running: true,
-						Health:  &types.Health{Status: "healthy"},
+						Health:  &types.Health{Status: types.Healthy},
 					},
 				}})
 		}
-		gock.New("127.0.0.1").
+		gock.New(utils.Config.Api.ExternalUrl).
 			Head("/rest-admin/v1/ready").
 			Reply(http.StatusOK)
-		gock.New("127.0.0.1").
+		gock.New(utils.Config.Api.ExternalUrl).
 			Head("/functions/v1/_internal/health").
 			Reply(http.StatusOK)
+		// Seed tenant services
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/" + utils.StorageId + "/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: true,
+					Health:  &types.Health{Status: types.Healthy},
+				},
+			}})
+		gock.New(utils.Config.Api.ExternalUrl).
+			Get("/storage/v1/bucket").
+			Reply(http.StatusOK).
+			JSON([]storage.BucketResponse{})
 		// Run test
 		err := utils.RunProgram(context.Background(), func(p utils.Program, ctx context.Context) error {
 			return run(p, context.Background(), fsys, []string{}, pgconn.Config{Host: utils.DbId}, conn.Intercept)
@@ -196,9 +202,8 @@ func TestDatabaseStart(t *testing.T) {
 		gock.New(utils.Docker.DaemonHost()).
 			Post("/v" + utils.Docker.ClientVersion() + "/networks/create").
 			Reply(http.StatusCreated).
-			JSON(types.NetworkCreateResponse{})
+			JSON(network.CreateResponse{})
 		// Caches all dependencies
-		utils.Config.Db.Image = utils.Pg15Image
 		imageUrl := utils.GetRegistryImageUrl(utils.Config.Db.Image)
 		gock.New(utils.Docker.DaemonHost()).
 			Get("/v" + utils.Docker.ClientVersion() + "/images/" + imageUrl + "/json").
@@ -220,7 +225,7 @@ func TestDatabaseStart(t *testing.T) {
 			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
 				State: &types.ContainerState{
 					Running: true,
-					Health:  &types.Health{Status: "healthy"},
+					Health:  &types.Health{Status: types.Healthy},
 				},
 			}})
 		// Run test

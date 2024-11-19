@@ -1,10 +1,11 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,13 +16,10 @@ func (suite *DBTestSuite) TestBranchCreate() {
 	// create branch
 	branch := "test-branch"
 	create, args, err := suite.cmd.Traverse([]string{"db", "branch", "create", branch})
-	if err != nil {
-		suite.Fail("failed to find create command")
-	}
+	require.NoError(suite.T(), err)
+	create.SetContext(context.Background())
 	err = create.RunE(create, args)
-	if err != nil {
-		suite.Fail("failed to create branch", err)
-	}
+	require.NoError(suite.T(), err)
 
 	// check if branch dir exists
 	_, err = os.Stat("supabase/.branches/" + branch)
@@ -33,8 +31,8 @@ func (suite *DBTestSuite) TestBranchCreate() {
 
 	// check commands in exec calls
 	require.Equal(suite.T(), 2, len(suite.bodies))
-	var execBody types.ExecConfig
+	var execBody container.ExecOptions
 	require.NoError(suite.T(), json.Unmarshal([]byte(suite.bodies[0]), &execBody))
-	var startBody types.ExecStartCheck
+	var startBody container.ExecStartOptions
 	require.NoError(suite.T(), json.Unmarshal([]byte(suite.bodies[1]), &startBody))
 }

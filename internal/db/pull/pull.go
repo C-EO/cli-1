@@ -18,11 +18,12 @@ import (
 	"github.com/supabase/cli/internal/migration/new"
 	"github.com/supabase/cli/internal/migration/repair"
 	"github.com/supabase/cli/internal/utils"
+	"github.com/supabase/cli/pkg/migration"
 )
 
 var (
-	errMissing       = errors.New("no migrations found")
-	errInSync        = errors.New("no schema changes found")
+	errMissing       = errors.New("No migrations found")
+	errInSync        = errors.New("No schema changes found")
 	errConflict      = errors.Errorf("The remote database's migration history does not match local files in %s directory.", utils.MigrationsDir)
 	suggestExtraPull = fmt.Sprintf(
 		"The %s and %s schemas are excluded. Run %s again to diff them.",
@@ -34,9 +35,6 @@ var (
 
 func Run(ctx context.Context, schema []string, config pgconn.Config, name string, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
 	// 1. Sanity checks.
-	if err := utils.AssertDockerIsRunning(ctx); err != nil {
-		return err
-	}
 	if err := utils.LoadConfigFS(fsys); err != nil {
 		return err
 	}
@@ -56,7 +54,9 @@ func Run(ctx context.Context, schema []string, config pgconn.Config, name string
 	}
 	// 4. Insert a row to `schema_migrations`
 	fmt.Fprintln(os.Stderr, "Schema written to "+utils.Bold(path))
-	if shouldUpdate := utils.PromptYesNo("Update remote migration history table?", true, os.Stdin); shouldUpdate {
+	if shouldUpdate, err := utils.NewConsole().PromptYesNo(ctx, "Update remote migration history table?", true); err != nil {
+		return err
+	} else if shouldUpdate {
 		return repair.UpdateMigrationTable(ctx, conn, []string{timestamp}, repair.Applied, false, fsys)
 	}
 	return nil
@@ -64,27 +64,27 @@ func Run(ctx context.Context, schema []string, config pgconn.Config, name string
 
 func run(p utils.Program, ctx context.Context, schema []string, path string, conn *pgx.Conn, fsys afero.Fs) error {
 	config := conn.Config().Config
-	defaultSchema := len(schema) == 0
 	// 1. Assert `supabase/migrations` and `schema_migrations` are in sync.
 	if err := assertRemoteInSync(ctx, conn, fsys); errors.Is(err, errMissing) {
-		if !defaultSchema {
+		// Not passing down schemas to avoid pulling in managed schemas
+		if err = dumpRemoteSchema(p, ctx, path, config, fsys); err == nil {
 			utils.CmdSuggestion = suggestExtraPull
 		}
-		// Not passing down schemas to avoid pulling in managed schemas
-		return dumpRemoteSchema(p, ctx, path, config, fsys)
+		return err
 	} else if err != nil {
 		return err
 	}
 	// 2. Fetch remote schema changes
+	defaultSchema := len(schema) == 0
 	if defaultSchema {
 		var err error
-		schema, err = diff.LoadUserSchemas(ctx, conn)
+		schema, err = migration.ListUserSchemas(ctx, conn)
 		if err != nil {
 			return err
 		}
 	}
 	err := diffRemoteSchema(p, ctx, schema, path, config, fsys)
-	if defaultSchema && (err == nil || errors.Is(errInSync, err)) {
+	if defaultSchema && (err == nil || errors.Is(err, errInSync)) {
 		utils.CmdSuggestion = suggestExtraPull
 	}
 	return err
@@ -93,6 +93,9 @@ func run(p utils.Program, ctx context.Context, schema []string, path string, con
 func dumpRemoteSchema(p utils.Program, ctx context.Context, path string, config pgconn.Config, fsys afero.Fs) error {
 	// Special case if this is the first migration
 	p.Send(utils.StatusMsg("Dumping schema from remote database..."))
+	if err := utils.MkdirIfNotExistFS(fsys, utils.MigrationsDir); err != nil {
+		return err
+	}
 	f, err := fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return errors.Errorf("failed to open dump file: %w", err)
@@ -111,14 +114,14 @@ func diffRemoteSchema(p utils.Program, ctx context.Context, schema []string, pat
 	if len(output) == 0 {
 		return errors.New(errInSync)
 	}
-	if err := afero.WriteFile(fsys, path, []byte(output), 0644); err != nil {
+	if err := utils.WriteFile(path, []byte(output), fsys); err != nil {
 		return errors.Errorf("failed to write dump file: %w", err)
 	}
 	return nil
 }
 
 func assertRemoteInSync(ctx context.Context, conn *pgx.Conn, fsys afero.Fs) error {
-	remoteMigrations, err := list.LoadRemoteMigrations(ctx, conn)
+	remoteMigrations, err := migration.ListRemoteMigrations(ctx, conn)
 	if err != nil {
 		return err
 	}

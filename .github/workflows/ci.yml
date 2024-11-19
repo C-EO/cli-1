@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - develop
 
 jobs:
   test:
@@ -18,6 +18,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Required by: internal/utils/credentials/keyring_test.go
+      - uses: t1m0thyj/unlock-keyring@v1
       - run: |
           go run gotest.tools/gotestsum -- ./... -race -v -count=1 \
           -coverpkg ./cmd/...,./internal/... -coverprofile=coverage.out
@@ -38,7 +40,7 @@ jobs:
           # Linter requires no cache
           cache: false
 
-      - uses: golangci/golangci-lint-action@v4
+      - uses: golangci/golangci-lint-action@v6
         with:
           args: --timeout 3m --verbose
 
@@ -68,7 +70,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - run: go generate tools/codegen/main.go
+      - run: go generate
       - run: |
           if ! git diff --ignore-space-at-eol --exit-code --quiet pkg; then
             echo "Detected uncommitted changes after codegen. See status below:"

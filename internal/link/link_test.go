@@ -3,24 +3,24 @@ package link
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
+	"net/http"
 	"testing"
 
+	"github.com/h2non/gock"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/supabase/cli/internal/migration/history"
 	"github.com/supabase/cli/internal/testing/apitest"
-	"github.com/supabase/cli/internal/testing/pgtest"
+	"github.com/supabase/cli/internal/testing/fstest"
+	"github.com/supabase/cli/internal/testing/helper"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/tenant"
 	"github.com/supabase/cli/pkg/api"
+	"github.com/supabase/cli/pkg/migration"
+	"github.com/supabase/cli/pkg/pgtest"
 	"github.com/zalando/go-keyring"
-	"gopkg.in/h2non/gock.v1"
 )
 
 var dbConfig = pgconn.Config{
@@ -29,42 +29,6 @@ var dbConfig = pgconn.Config{
 	User:     "admin",
 	Password: "password",
 	Database: "postgres",
-}
-
-// Reset global variable
-func teardown() {
-	updatedConfig.Api = nil
-	updatedConfig.Db = nil
-	updatedConfig.Pooler = nil
-}
-
-func TestPostRun(t *testing.T) {
-	t.Run("prints completion message", func(t *testing.T) {
-		defer teardown()
-		project := "test-project"
-		// Setup in-memory fs
-		fsys := afero.NewMemMapFs()
-		// Run test
-		buf := &strings.Builder{}
-		err := PostRun(project, buf, fsys)
-		// Check error
-		assert.NoError(t, err)
-		assert.Equal(t, "Finished supabase link.\n", buf.String())
-	})
-
-	t.Run("prints changed config", func(t *testing.T) {
-		defer teardown()
-		project := "test-project"
-		updatedConfig.Api = "test"
-		// Setup in-memory fs
-		fsys := afero.NewMemMapFs()
-		// Run test
-		buf := &strings.Builder{}
-		err := PostRun(project, buf, fsys)
-		// Check error
-		assert.NoError(t, err)
-		assert.Contains(t, buf.String(), `api = "test"`)
-	})
 }
 
 func TestLinkCommand(t *testing.T) {
@@ -76,28 +40,21 @@ func TestLinkCommand(t *testing.T) {
 	keyring.MockInit()
 
 	t.Run("link valid project", func(t *testing.T) {
-		defer teardown()
-		// Change stdin to read from a file
-		stdin, err := os.CreateTemp("", "")
-		require.NoError(t, err)
-		defer os.Remove(stdin.Name())
-
-		_, err = stdin.Write([]byte{'\n'})
-		require.NoError(t, err)
-		_, err = stdin.Seek(0, 0)
-		require.NoError(t, err)
-
-		oldStdin := os.Stdin
-		defer func() { os.Stdin = oldStdin }()
-		os.Stdin = stdin
+		t.Cleanup(fstest.MockStdin(t, "\n"))
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		pgtest.MockMigrationHistory(conn)
+		helper.MockMigrationHistory(conn)
+		helper.MockSeedHistory(conn)
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
+		// Mock project status
+		gock.New(utils.DefaultApiHost).
+			Get("/v1/projects/" + project).
+			Reply(200).
+			JSON(api.V1ProjectResponse{Status: api.V1ProjectResponseStatusACTIVEHEALTHY})
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/api-keys").
 			Reply(200).
@@ -106,9 +63,9 @@ func TestLinkCommand(t *testing.T) {
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/postgrest").
 			Reply(200).
-			JSON(api.PostgrestConfigResponse{})
+			JSON(api.V1PostgrestConfigResponse{})
 		gock.New(utils.DefaultApiHost).
-			Get("/v1/projects/" + project + "/config/database/pgbouncer").
+			Get("/v1/projects/" + project + "/config/database/pooler").
 			Reply(200).
 			JSON(api.V1PgbouncerConfigResponse{})
 		// Link versions
@@ -126,14 +83,14 @@ func TestLinkCommand(t *testing.T) {
 			Get("/storage/v1/version").
 			Reply(200).
 			BodyString("0.40.4")
-		postgres := api.DatabaseResponse{
+		postgres := api.V1DatabaseResponse{
 			Host:    utils.GetSupabaseDbHost(project),
 			Version: "15.1.0.117",
 		}
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects").
 			Reply(200).
-			JSON([]api.ProjectResponse{
+			JSON([]api.V1ProjectResponse{
 				{
 					Id:             project,
 					Database:       &postgres,
@@ -144,7 +101,7 @@ func TestLinkCommand(t *testing.T) {
 				},
 			})
 		// Run test
-		err = Run(context.Background(), project, fsys, conn.Intercept)
+		err := Run(context.Background(), project, fsys, conn.Intercept)
 		// Check error
 		assert.NoError(t, err)
 		assert.Empty(t, apitest.ListUnmatchedRequests())
@@ -164,23 +121,16 @@ func TestLinkCommand(t *testing.T) {
 	})
 
 	t.Run("ignores error linking services", func(t *testing.T) {
-		// Change stdin to read from a file
-		stdin, err := os.CreateTemp("", "")
-		require.NoError(t, err)
-		defer os.Remove(stdin.Name())
-
-		_, err = stdin.Write([]byte{'\n'})
-		require.NoError(t, err)
-		_, err = stdin.Seek(0, 0)
-		require.NoError(t, err)
-
-		oldStdin := os.Stdin
-		defer func() { os.Stdin = oldStdin }()
-		os.Stdin = stdin
+		t.Cleanup(fstest.MockStdin(t, "\n"))
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
+		// Mock project status
+		gock.New(utils.DefaultApiHost).
+			Get("/v1/projects/" + project).
+			Reply(200).
+			JSON(api.V1ProjectResponse{Status: api.V1ProjectResponseStatusACTIVEHEALTHY})
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/api-keys").
 			Reply(200).
@@ -190,7 +140,7 @@ func TestLinkCommand(t *testing.T) {
 			Get("/v1/projects/" + project + "/postgrest").
 			ReplyError(errors.New("network error"))
 		gock.New(utils.DefaultApiHost).
-			Get("/v1/projects/" + project + "/config/database/pgbouncer").
+			Get("/v1/projects/" + project + "/config/database/pooler").
 			ReplyError(errors.New("network error"))
 		// Link versions
 		gock.New("https://" + utils.GetSupabaseHost(project)).
@@ -206,7 +156,7 @@ func TestLinkCommand(t *testing.T) {
 			Get("/v1/projects").
 			ReplyError(errors.New("network error"))
 		// Run test
-		err = Run(context.Background(), project, fsys, func(cc *pgx.ConnConfig) {
+		err := Run(context.Background(), project, fsys, func(cc *pgx.ConnConfig) {
 			cc.LookupFunc = func(ctx context.Context, host string) (addrs []string, err error) {
 				return nil, errors.New("hostname resolving error")
 			}
@@ -217,11 +167,15 @@ func TestLinkCommand(t *testing.T) {
 	})
 
 	t.Run("throws error on write failure", func(t *testing.T) {
-		defer teardown()
 		// Setup in-memory fs
 		fsys := afero.NewReadOnlyFs(afero.NewMemMapFs())
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
+		// Mock project status
+		gock.New(utils.DefaultApiHost).
+			Get("/v1/projects/" + project).
+			Reply(200).
+			JSON(api.V1ProjectResponse{Status: api.V1ProjectResponseStatusACTIVEHEALTHY})
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/api-keys").
 			Reply(200).
@@ -231,7 +185,7 @@ func TestLinkCommand(t *testing.T) {
 			Get("/v1/projects/" + project + "/postgrest").
 			ReplyError(errors.New("network error"))
 		gock.New(utils.DefaultApiHost).
-			Get("/v1/projects/" + project + "/config/database/pgbouncer").
+			Get("/v1/projects/" + project + "/config/database/pooler").
 			ReplyError(errors.New("network error"))
 		// Link versions
 		gock.New("https://" + utils.GetSupabaseHost(project)).
@@ -258,6 +212,39 @@ func TestLinkCommand(t *testing.T) {
 	})
 }
 
+func TestStatusCheck(t *testing.T) {
+	project := "test-project"
+
+	t.Run("ignores project not found", func(t *testing.T) {
+		// Flush pending mocks after test execution
+		defer gock.OffAll()
+		// Mock project status
+		gock.New(utils.DefaultApiHost).
+			Get("/v1/projects/" + project).
+			Reply(http.StatusNotFound)
+		// Run test
+		err := checkRemoteProjectStatus(context.Background(), project)
+		// Check error
+		assert.NoError(t, err)
+		assert.Empty(t, apitest.ListUnmatchedRequests())
+	})
+
+	t.Run("throws error on project inactive", func(t *testing.T) {
+		// Flush pending mocks after test execution
+		defer gock.OffAll()
+		// Mock project status
+		gock.New(utils.DefaultApiHost).
+			Get("/v1/projects/" + project).
+			Reply(http.StatusOK).
+			JSON(api.V1ProjectResponse{Status: api.V1ProjectResponseStatusINACTIVE})
+		// Run test
+		err := checkRemoteProjectStatus(context.Background(), project)
+		// Check error
+		assert.ErrorIs(t, err, errProjectPaused)
+		assert.Empty(t, apitest.ListUnmatchedRequests())
+	})
+}
+
 func TestLinkPostgrest(t *testing.T) {
 	project := "test-project"
 	// Setup valid access token
@@ -265,30 +252,27 @@ func TestLinkPostgrest(t *testing.T) {
 	t.Setenv("SUPABASE_ACCESS_TOKEN", string(token))
 
 	t.Run("ignores matching config", func(t *testing.T) {
-		defer teardown()
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/postgrest").
 			Reply(200).
-			JSON(api.PostgrestConfigResponse{})
+			JSON(api.V1PostgrestConfigResponse{})
 		// Run test
 		err := linkPostgrest(context.Background(), project)
 		// Check error
 		assert.NoError(t, err)
 		assert.Empty(t, apitest.ListUnmatchedRequests())
-		assert.Empty(t, updatedConfig)
 	})
 
 	t.Run("updates api on newer config", func(t *testing.T) {
-		defer teardown()
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
 		gock.New(utils.DefaultApiHost).
 			Get("/v1/projects/" + project + "/postgrest").
 			Reply(200).
-			JSON(api.PostgrestConfigResponse{
-				DbSchema:          "public, storage, graphql_public",
+			JSON(api.V1PostgrestConfigResponse{
+				DbSchema:          "public, graphql_public",
 				DbExtraSearchPath: "public, extensions",
 				MaxRows:           1000,
 			})
@@ -297,16 +281,12 @@ func TestLinkPostgrest(t *testing.T) {
 		// Check error
 		assert.NoError(t, err)
 		assert.Empty(t, apitest.ListUnmatchedRequests())
-		utils.Config.Api.Schemas = []string{"public", "storage", "graphql_public"}
-		utils.Config.Api.ExtraSearchPath = []string{"public", "extensions"}
-		utils.Config.Api.MaxRows = 1000
-		assert.Equal(t, ConfigCopy{
-			Api: utils.Config.Api,
-		}, updatedConfig)
+		assert.ElementsMatch(t, []string{"public", "graphql_public"}, utils.Config.Api.Schemas)
+		assert.ElementsMatch(t, []string{"public", "extensions"}, utils.Config.Api.ExtraSearchPath)
+		assert.Equal(t, uint(1000), utils.Config.Api.MaxRows)
 	})
 
 	t.Run("throws error on network failure", func(t *testing.T) {
-		defer teardown()
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
 		gock.New(utils.DefaultApiHost).
@@ -320,7 +300,6 @@ func TestLinkPostgrest(t *testing.T) {
 	})
 
 	t.Run("throws error on server unavailable", func(t *testing.T) {
-		defer teardown()
 		// Flush pending mocks after test execution
 		defer gock.OffAll()
 		gock.New(utils.DefaultApiHost).
@@ -337,31 +316,27 @@ func TestLinkPostgrest(t *testing.T) {
 
 func TestLinkDatabase(t *testing.T) {
 	t.Run("throws error on connect failure", func(t *testing.T) {
-		defer teardown()
 		// Run test
 		err := linkDatabase(context.Background(), pgconn.Config{})
 		// Check error
 		assert.ErrorContains(t, err, "invalid port (outside range)")
-		assert.Empty(t, updatedConfig)
 	})
 
 	t.Run("ignores missing server version", func(t *testing.T) {
-		defer teardown()
 		// Setup mock postgres
 		conn := pgtest.NewWithStatus(map[string]string{
 			"standard_conforming_strings": "on",
 		})
 		defer conn.Close(t)
-		pgtest.MockMigrationHistory(conn)
+		helper.MockMigrationHistory(conn)
+		helper.MockSeedHistory(conn)
 		// Run test
 		err := linkDatabase(context.Background(), dbConfig, conn.Intercept)
 		// Check error
 		assert.NoError(t, err)
-		assert.Empty(t, updatedConfig)
 	})
 
 	t.Run("updates config to newer db version", func(t *testing.T) {
-		defer teardown()
 		utils.Config.Db.MajorVersion = 14
 		// Setup mock postgres
 		conn := pgtest.NewWithStatus(map[string]string{
@@ -369,29 +344,28 @@ func TestLinkDatabase(t *testing.T) {
 			"server_version":              "15.0",
 		})
 		defer conn.Close(t)
-		pgtest.MockMigrationHistory(conn)
+		helper.MockMigrationHistory(conn)
+		helper.MockSeedHistory(conn)
 		// Run test
 		err := linkDatabase(context.Background(), dbConfig, conn.Intercept)
 		// Check error
 		assert.NoError(t, err)
 		utils.Config.Db.MajorVersion = 15
-		assert.Equal(t, ConfigCopy{
-			Db: utils.Config.Db,
-		}, updatedConfig)
+		assert.Equal(t, uint(15), utils.Config.Db.MajorVersion)
 	})
 
 	t.Run("throws error on query failure", func(t *testing.T) {
-		defer teardown()
 		utils.Config.Db.MajorVersion = 14
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(history.CREATE_VERSION_SCHEMA).
+		conn.Query(migration.SET_LOCK_TIMEOUT).
+			Query(migration.CREATE_VERSION_SCHEMA).
 			Reply("CREATE SCHEMA").
-			Query(history.CREATE_VERSION_TABLE).
+			Query(migration.CREATE_VERSION_TABLE).
 			ReplyError(pgerrcode.InsufficientPrivilege, "permission denied for relation supabase_migrations").
-			Query(history.ADD_STATEMENTS_COLUMN).
-			Query(history.ADD_NAME_COLUMN)
+			Query(migration.ADD_STATEMENTS_COLUMN).
+			Query(migration.ADD_NAME_COLUMN)
 		// Run test
 		err := linkDatabase(context.Background(), dbConfig, conn.Intercept)
 		// Check error

@@ -1,26 +1,34 @@
 package squash
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/h2non/gock"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/supabase/cli/internal/migration/history"
+	"github.com/supabase/cli/internal/db/start"
 	"github.com/supabase/cli/internal/migration/repair"
 	"github.com/supabase/cli/internal/testing/apitest"
 	"github.com/supabase/cli/internal/testing/fstest"
-	"github.com/supabase/cli/internal/testing/pgtest"
+	"github.com/supabase/cli/internal/testing/helper"
 	"github.com/supabase/cli/internal/utils"
-	"gopkg.in/h2non/gock.v1"
+	"github.com/supabase/cli/pkg/migration"
+	"github.com/supabase/cli/pkg/pgtest"
 )
 
 var dbConfig = pgconn.Config{
@@ -46,26 +54,40 @@ func TestSquashCommand(t *testing.T) {
 		// Setup mock docker
 		require.NoError(t, apitest.MockDocker(utils.Docker))
 		defer gock.OffAll()
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg15Image), "test-shadow-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: true,
+					Health:  &types.Health{Status: types.Healthy},
+				},
+			}})
 		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
 			Reply(http.StatusOK)
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StorageImage), "test-storage")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Realtime.Image), "test-realtime")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-realtime", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.Image), "test-storage")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-storage", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.GotrueImage), "test-auth")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Auth.Image), "test-auth")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-auth", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Pg15Image), "test-db")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-db")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-db", sql))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-db")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-db", sql))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-db")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-db", sql))
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(sql).
-			Reply("CREATE SCHEMA")
-		pgtest.MockMigrationHistory(conn)
-		conn.Query(history.INSERT_MIGRATION_VERSION, "0", "init", fmt.Sprintf("{%s}", sql)).
-			Reply("INSERT 0 1")
-		pgtest.MockMigrationHistory(conn)
-		conn.Query(history.INSERT_MIGRATION_VERSION, "1", "target", "{}").
+		helper.MockMigrationHistory(conn).
+			Query(sql).
+			Reply("CREATE SCHEMA").
+			Query(migration.INSERT_MIGRATION_VERSION, "0", "init", []string{sql}).
+			Reply("INSERT 0 1").
+			Query(migration.INSERT_MIGRATION_VERSION, "1", "target", nil).
 			Reply("INSERT 0 1")
 		// Run test
 		err := Run(context.Background(), "", pgconn.Config{
@@ -93,10 +115,13 @@ func TestSquashCommand(t *testing.T) {
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <= '0';INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES('0', 'init', '{%s}')", sql)).
+		helper.MockMigrationHistory(conn).
+			Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <=  '0' ;INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES( '0' ,  'init' ,  '{%s}' )", sql)).
 			Reply("INSERT 0 1")
 		// Run test
-		err := Run(context.Background(), "0", dbConfig, fsys, conn.Intercept)
+		err := Run(context.Background(), "0", dbConfig, fsys, conn.Intercept, func(cc *pgx.ConnConfig) {
+			cc.PreferSimpleProtocol = true
+		})
 		// Check error
 		assert.NoError(t, err)
 		match, err := afero.FileContainsBytes(fsys, path, []byte(sql))
@@ -165,7 +190,6 @@ func TestSquashVersion(t *testing.T) {
 
 func TestSquashMigrations(t *testing.T) {
 	utils.Config.Db.MajorVersion = 15
-	utils.Config.Db.Image = utils.Pg15Image
 	utils.Config.Db.ShadowPort = 54320
 
 	t.Run("throws error on shadow create failure", func(t *testing.T) {
@@ -184,6 +208,36 @@ func TestSquashMigrations(t *testing.T) {
 		assert.Empty(t, apitest.ListUnmatchedRequests())
 	})
 
+	t.Run("throws error on health check failure", func(t *testing.T) {
+		start.HealthTimeout = time.Millisecond
+		// Setup in-memory fs
+		fsys := afero.NewMemMapFs()
+		// Setup mock docker
+		require.NoError(t, apitest.MockDocker(utils.Docker))
+		defer gock.OffAll()
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: false,
+					Status:  "exited",
+				},
+			}})
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/logs").
+			Reply(http.StatusServiceUnavailable)
+		gock.New(utils.Docker.DaemonHost()).
+			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
+			Reply(http.StatusOK)
+		// Run test
+		err := squashMigrations(context.Background(), nil, fsys)
+		// Check error
+		assert.ErrorContains(t, err, "test-shadow-db container is not running: exited")
+		assert.Empty(t, apitest.ListUnmatchedRequests())
+	})
+
 	t.Run("throws error on shadow migrate failure", func(t *testing.T) {
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
@@ -192,10 +246,19 @@ func TestSquashMigrations(t *testing.T) {
 		defer gock.OffAll()
 		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: true,
+					Health:  &types.Health{Status: types.Healthy},
+				},
+			}})
+		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
 			Reply(http.StatusOK)
 		gock.New(utils.Docker.DaemonHost()).
-			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.StorageImage) + "/json").
+			Get("/v" + utils.Docker.ClientVersion() + "/images/" + utils.GetRegistryImageUrl(utils.Config.Realtime.Image) + "/json").
 			ReplyError(errors.New("network error"))
 		// Setup mock postgres
 		conn := pgtest.NewConn()
@@ -218,22 +281,37 @@ func TestSquashMigrations(t *testing.T) {
 		defer gock.OffAll()
 		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-shadow-db")
 		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db/json").
+			Reply(http.StatusOK).
+			JSON(types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{
+					Running: true,
+					Health:  &types.Health{Status: types.Healthy},
+				},
+			}})
+		gock.New(utils.Docker.DaemonHost()).
 			Delete("/v" + utils.Docker.ClientVersion() + "/containers/test-shadow-db").
 			Reply(http.StatusOK)
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.StorageImage), "test-storage")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Realtime.Image), "test-realtime")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-realtime", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Storage.Image), "test-storage")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-storage", ""))
-		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.GotrueImage), "test-auth")
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Auth.Image), "test-auth")
 		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-auth", ""))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-db")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-db", sql))
+		apitest.MockDockerStart(utils.Docker, utils.GetRegistryImageUrl(utils.Config.Db.Image), "test-db")
+		require.NoError(t, apitest.MockDockerLogs(utils.Docker, "test-db", sql))
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(sql).
-			Reply("CREATE SCHEMA")
-		pgtest.MockMigrationHistory(conn)
-		conn.Query(history.INSERT_MIGRATION_VERSION, "0", "init", fmt.Sprintf("{%s}", sql)).
+		helper.MockMigrationHistory(conn).
+			Query(sql).
+			Reply("CREATE SCHEMA").
+			Query(migration.INSERT_MIGRATION_VERSION, "0", "init", []string{sql}).
 			Reply("INSERT 0 1")
 		// Run test
-		err := squashMigrations(context.Background(), []string{filepath.Base(path)}, afero.NewReadOnlyFs(fsys), conn.Intercept)
+		err := squashMigrations(context.Background(), []string{path}, afero.NewReadOnlyFs(fsys), conn.Intercept)
 		// Check error
 		assert.ErrorIs(t, err, os.ErrPermission)
 		assert.Empty(t, apitest.ListUnmatchedRequests())
@@ -254,10 +332,13 @@ func TestBaselineMigration(t *testing.T) {
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <= '0';INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES('0', 'init', '{%s}')", sql)).
+		helper.MockMigrationHistory(conn).
+			Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <=  '0' ;INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES( '0' ,  'init' ,  '{%s}' )", sql)).
 			Reply("INSERT 0 1")
 		// Run test
-		err := baselineMigrations(context.Background(), dbConfig, "", fsys, conn.Intercept)
+		err := baselineMigrations(context.Background(), dbConfig, "", fsys, conn.Intercept, func(cc *pgx.ConnConfig) {
+			cc.PreferSimpleProtocol = true
+		})
 		// Check error
 		assert.NoError(t, err)
 	})
@@ -279,10 +360,13 @@ func TestBaselineMigration(t *testing.T) {
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
-		conn.Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <= '%[1]s';INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES('%[1]s', 'init', null)", "0")).
+		helper.MockMigrationHistory(conn).
+			Query(fmt.Sprintf("DELETE FROM supabase_migrations.schema_migrations WHERE version <=  '%[1]s' ;INSERT INTO supabase_migrations.schema_migrations(version, name, statements) VALUES( '%[1]s' ,  'init' ,  null )", "0")).
 			ReplyError(pgerrcode.InsufficientPrivilege, "permission denied for relation supabase_migrations")
 		// Run test
-		err := baselineMigrations(context.Background(), dbConfig, "0", fsys, conn.Intercept)
+		err := baselineMigrations(context.Background(), dbConfig, "0", fsys, conn.Intercept, func(cc *pgx.ConnConfig) {
+			cc.PreferSimpleProtocol = true
+		})
 		// Check error
 		assert.ErrorContains(t, err, `ERROR: permission denied for relation supabase_migrations (SQLSTATE 42501)`)
 	})
@@ -293,9 +377,63 @@ func TestBaselineMigration(t *testing.T) {
 		// Setup mock postgres
 		conn := pgtest.NewConn()
 		defer conn.Close(t)
+		helper.MockMigrationHistory(conn)
 		// Run test
 		err := baselineMigrations(context.Background(), dbConfig, "0", fsys, conn.Intercept)
 		// Check error
 		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+}
+
+//go:embed testdata/*.sql
+var testdata embed.FS
+
+func TestLineByLine(t *testing.T) {
+	t.Run("diffs output from pg_dump", func(t *testing.T) {
+		before, err := testdata.Open("testdata/before.sql")
+		require.NoError(t, err)
+		after, err := testdata.Open("testdata/after.sql")
+		require.NoError(t, err)
+		expected, err := testdata.ReadFile("testdata/diff.sql")
+		require.NoError(t, err)
+		// Run test
+		var out bytes.Buffer
+		err = lineByLineDiff(before, after, &out)
+		// Check error
+		assert.NoError(t, err)
+		assert.Equal(t, expected, out.Bytes())
+	})
+
+	t.Run("diffs shorter before", func(t *testing.T) {
+		before := strings.NewReader("select 1;")
+		after := strings.NewReader("select 0;\nselect 1;\nselect 2;")
+		// Run test
+		var out bytes.Buffer
+		err := lineByLineDiff(before, after, &out)
+		// Check error
+		assert.NoError(t, err)
+		assert.Equal(t, "select 0;\nselect 2;\n", out.String())
+	})
+
+	t.Run("diffs shorter after", func(t *testing.T) {
+		before := strings.NewReader("select 1;\nselect 2;")
+		after := strings.NewReader("select 1;")
+		// Run test
+		var out bytes.Buffer
+		err := lineByLineDiff(before, after, &out)
+		// Check error
+		assert.NoError(t, err)
+		assert.Equal(t, "", out.String())
+	})
+
+	t.Run("diffs no match", func(t *testing.T) {
+		before := strings.NewReader("select 0;\nselect 1;")
+		after := strings.NewReader("select 1;")
+		// Run test
+		var out bytes.Buffer
+		err := lineByLineDiff(before, after, &out)
+		// Check error
+		assert.NoError(t, err)
+		assert.Equal(t, "select 1;\n", out.String())
 	})
 }

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/go-errors/errors"
 	"github.com/jackc/pgconn"
 	"github.com/spf13/afero"
 	"github.com/supabase/cli/internal/db/start"
 	"github.com/supabase/cli/internal/migration/new"
 	"github.com/supabase/cli/internal/utils"
+	"github.com/supabase/cli/pkg/config"
 )
 
 var warnDiff = `WARNING: The diff tool is not foolproof, so you may need to manually rearrange and modify the generated migration.
@@ -22,8 +22,8 @@ func SaveDiff(out, file string, fsys afero.Fs) error {
 		fmt.Fprintln(os.Stderr, "No schema changes found")
 	} else if len(file) > 0 {
 		path := new.GetMigrationPath(utils.GetCurrentTimestamp(), file)
-		if err := afero.WriteFile(fsys, path, []byte(out), 0644); err != nil {
-			return errors.Errorf("failed to save diff: %w", err)
+		if err := utils.WriteFile(path, []byte(out), fsys); err != nil {
+			return err
 		}
 		fmt.Fprintln(os.Stderr, warnDiff)
 	} else {
@@ -58,13 +58,13 @@ func run(p utils.Program, ctx context.Context, schema []string, config pgconn.Co
 	p.Send(utils.StatusMsg("Creating shadow database..."))
 
 	// 1. Create shadow db and run migrations
-	shadow, err := CreateShadowDatabase(ctx)
+	shadow, err := CreateShadowDatabase(ctx, utils.Config.Db.ShadowPort)
 	if err != nil {
 		return err
 	}
 	defer utils.DockerRemove(shadow)
-	if !start.WaitForHealthyService(ctx, shadow, start.HealthTimeout) {
-		return errors.New(start.ErrDatabase)
+	if err := start.WaitForHealthyService(ctx, start.HealthTimeout, shadow); err != nil {
+		return err
 	}
 	if err := MigrateShadowDatabase(ctx, shadow, fsys); err != nil {
 		return err
@@ -85,7 +85,7 @@ func DiffSchemaPgAdmin(ctx context.Context, source, target string, schema []stri
 	if len(schema) == 0 {
 		if err := utils.DockerRunOnceWithStream(
 			ctx,
-			utils.DifferImage,
+			config.DifferImage,
 			nil,
 			args,
 			stream.Stdout(),
@@ -98,7 +98,7 @@ func DiffSchemaPgAdmin(ctx context.Context, source, target string, schema []stri
 		p.Send(utils.StatusMsg("Diffing schema: " + s))
 		if err := utils.DockerRunOnceWithStream(
 			ctx,
-			utils.DifferImage,
+			config.DifferImage,
 			nil,
 			append([]string{"--schema", s}, args...),
 			stream.Stdout(),

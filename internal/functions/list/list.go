@@ -12,7 +12,7 @@ import (
 )
 
 func Run(ctx context.Context, projectRef string, fsys afero.Fs) error {
-	resp, err := utils.GetSupabase().GetFunctionsWithResponse(ctx, projectRef)
+	resp, err := utils.GetSupabase().V1ListAllFunctionsWithResponse(ctx, projectRef)
 	if err != nil {
 		return errors.Errorf("failed to list functions: %w", err)
 	}
@@ -25,14 +25,14 @@ func Run(ctx context.Context, projectRef string, fsys afero.Fs) error {
 |-|-|-|-|-|-|
 `
 	for _, function := range *resp.JSON200 {
-		t := time.UnixMilli(int64(function.UpdatedAt))
+		t := time.UnixMilli(function.UpdatedAt)
 		table += fmt.Sprintf(
 			"|`%s`|`%s`|`%s`|`%s`|`%d`|`%s`|\n",
 			function.Id,
 			function.Name,
 			function.Slug,
 			function.Status,
-			uint64(function.Version),
+			function.Version,
 			t.UTC().Format("2006-01-02 15:04:05"),
 		)
 	}

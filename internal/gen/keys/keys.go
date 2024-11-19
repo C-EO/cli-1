@@ -7,32 +7,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/go-git/go-git/v5"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/afero"
 	"github.com/supabase/cli/internal/utils"
+	"github.com/supabase/cli/pkg/config"
 )
-
-type CustomClaims struct {
-	Ref  string `json:"ref"`
-	Role string `json:"role"`
-	jwt.RegisteredClaims
-}
-
-func NewJWTToken(ref, role string, expiry time.Time) *jwt.Token {
-	claims := CustomClaims{
-		ref,
-		role,
-		jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiry),
-			Issuer:    "supabase",
-		},
-	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-}
 
 type CustomName struct {
 	DbHost         string `env:"db.host,default=NEXT_PUBLIC_SUPABASE_URL"`
@@ -58,7 +39,7 @@ func Run(ctx context.Context, projectRef, format string, names CustomName, fsys 
 
 func GenerateSecrets(ctx context.Context, projectRef, branch string, fsys afero.Fs) error {
 	// Load JWT secret from api
-	resp, err := utils.GetSupabase().GetPostgRESTConfigWithResponse(ctx, projectRef)
+	resp, err := utils.GetSupabase().V1GetPostgrestServiceConfigWithResponse(ctx, projectRef)
 	if err != nil {
 		return errors.Errorf("failed to get postgrest config: %w", err)
 	}
@@ -75,15 +56,20 @@ func GenerateSecrets(ctx context.Context, projectRef, branch string, fsys afero.
 	hash := sha256.Sum256([]byte(key))
 	utils.Config.Db.Password = hex.EncodeToString(hash[:])
 	// Generate JWT tokens
-	expiry := time.Now().AddDate(10, 0, 0)
-	anonToken := NewJWTToken(projectRef, "anon", expiry)
-	utils.Config.Auth.AnonKey, err = anonToken.SignedString([]byte(utils.Config.Auth.JwtSecret))
-	if err != nil {
+	anonToken := config.CustomClaims{
+		Issuer: "supabase",
+		Ref:    projectRef,
+		Role:   "anon",
+	}.NewToken()
+	if utils.Config.Auth.AnonKey, err = anonToken.SignedString([]byte(utils.Config.Auth.JwtSecret)); err != nil {
 		return errors.Errorf("failed to sign anon key: %w", err)
 	}
-	serviceToken := NewJWTToken(projectRef, "service_role", expiry)
-	utils.Config.Auth.ServiceRoleKey, err = serviceToken.SignedString([]byte(utils.Config.Auth.JwtSecret))
-	if err != nil {
+	serviceToken := config.CustomClaims{
+		Issuer: "supabase",
+		Ref:    projectRef,
+		Role:   "service_role",
+	}.NewToken()
+	if utils.Config.Auth.ServiceRoleKey, err = serviceToken.SignedString([]byte(utils.Config.Auth.JwtSecret)); err != nil {
 		return errors.Errorf("failed to sign service_role key: %w", err)
 	}
 	return nil

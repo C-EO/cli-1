@@ -2,21 +2,15 @@ package up
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"path/filepath"
+	"strings"
 
+	"github.com/go-errors/errors"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
-	"github.com/supabase/cli/internal/migration/apply"
-	"github.com/supabase/cli/internal/migration/list"
 	"github.com/supabase/cli/internal/utils"
-)
-
-var (
-	errMissingRemote = errors.New("Found local migration files to be inserted before the last migration on remote database.")
-	errMissingLocal  = errors.New("Remote migration versions not found in " + utils.MigrationsDir + " directory.")
+	"github.com/supabase/cli/pkg/migration"
 )
 
 func Run(ctx context.Context, includeAll bool, config pgconn.Config, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
@@ -29,59 +23,41 @@ func Run(ctx context.Context, includeAll bool, config pgconn.Config, fsys afero.
 	if err != nil {
 		return err
 	}
-	return apply.MigrateUp(ctx, conn, pending, fsys)
+	return migration.ApplyMigrations(ctx, pending, conn, afero.NewIOFS(fsys))
 }
 
 func GetPendingMigrations(ctx context.Context, includeAll bool, conn *pgx.Conn, fsys afero.Fs) ([]string, error) {
-	remoteMigrations, err := list.LoadRemoteMigrations(ctx, conn)
+	remoteMigrations, err := migration.ListRemoteMigrations(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	localMigrations, err := list.LoadLocalMigrations(fsys)
+	localMigrations, err := migration.ListLocalMigrations(utils.MigrationsDir, afero.NewIOFS(fsys))
 	if err != nil {
 		return nil, err
 	}
-	// Find local migrations older than the last migration on remote
-	var unapplied []string
-	for i, remote := range remoteMigrations {
-		for _, filename := range localMigrations[i+len(unapplied):] {
-			// Check if migration has been applied before, LoadLocalMigrations guarantees a match
-			local := utils.MigrateFilePattern.FindStringSubmatch(filename)[1]
-			if remote == local {
-				break
-			}
-			// Include out-of-order local migrations
-			unapplied = append(unapplied, filename)
+	diff, err := migration.FindPendingMigrations(localMigrations, remoteMigrations)
+	if errors.Is(err, migration.ErrMissingLocal) {
+		utils.CmdSuggestion = suggestRevertHistory(diff)
+	} else if errors.Is(err, migration.ErrMissingRemote) {
+		if includeAll {
+			pending := localMigrations[len(remoteMigrations)+len(diff):]
+			return append(diff, pending...), nil
 		}
-		// Check if all remote versions exist in local
-		if i+len(unapplied) >= len(localMigrations) {
-			utils.CmdSuggestion = suggestRevertHistory(remoteMigrations[i:])
-			return nil, errMissingLocal
-		}
+		utils.CmdSuggestion = suggestIgnoreFlag(diff)
 	}
-	// Enforce migrations are applied in chronological order by default
-	if !includeAll && len(unapplied) > 0 {
-		utils.CmdSuggestion = suggestIgnoreFlag(unapplied)
-		return nil, errMissingRemote
-	}
-	pending := localMigrations[len(remoteMigrations)+len(unapplied):]
-	return append(unapplied, pending...), nil
+	return diff, err
 }
 
 func suggestRevertHistory(versions []string) string {
 	result := fmt.Sprintln("\nMake sure your local git repo is up-to-date. If the error persists, try repairing the migration history table:")
-	for _, ver := range versions {
-		result += fmt.Sprintln(utils.Bold("supabase migration repair --status reverted " + ver))
-	}
+	result += fmt.Sprintln(utils.Bold("supabase migration repair --status reverted " + strings.Join(versions, " ")))
 	result += fmt.Sprintln("\nAnd update local migrations to match remote database:")
 	result += fmt.Sprintln(utils.Bold("supabase db pull"))
 	return result
 }
 
-func suggestIgnoreFlag(filenames []string) string {
+func suggestIgnoreFlag(paths []string) string {
 	result := "\nRerun the command with --include-all flag to apply these migrations:\n"
-	for _, name := range filenames {
-		result += fmt.Sprintln(utils.Bold(filepath.Join(utils.MigrationsDir, name)))
-	}
+	result += fmt.Sprintln(utils.Bold(strings.Join(paths, "\n")))
 	return result
 }

@@ -1,8 +1,11 @@
 package flags
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"os"
+	"strings"
 
 	"github.com/go-errors/errors"
 	"github.com/jackc/pgconn"
@@ -11,12 +14,14 @@ import (
 	"github.com/spf13/viper"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/credentials"
+	"github.com/supabase/cli/pkg/api"
 )
 
 type connection int
 
 const (
-	direct connection = iota
+	unknown connection = iota
+	direct
 	local
 	linked
 	proxy
@@ -45,6 +50,11 @@ func ParseDatabaseConfig(flagSet *pflag.FlagSet, fsys afero.Fs) error {
 	// Update connection config
 	switch connType {
 	case direct:
+		if err := utils.Config.Load("", utils.NewRootFS(fsys)); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
 		if flag := flagSet.Lookup("db-url"); flag != nil {
 			config, err := pgconn.ParseConfig(flag.Value.String())
 			if err != nil {
@@ -58,7 +68,7 @@ func ParseDatabaseConfig(flagSet *pflag.FlagSet, fsys afero.Fs) error {
 		}
 		// Ignore other PG settings
 		DbConfig.Host = utils.Config.Hostname
-		DbConfig.Port = uint16(utils.Config.Db.Port)
+		DbConfig.Port = utils.Config.Db.Port
 		DbConfig.User = "postgres"
 		DbConfig.Password = utils.Config.Db.Password
 		DbConfig.Database = "postgres"
@@ -70,7 +80,7 @@ func ParseDatabaseConfig(flagSet *pflag.FlagSet, fsys afero.Fs) error {
 		if err != nil {
 			return err
 		}
-		DbConfig = newDbConfigWithPassword(projectRef)
+		DbConfig = NewDbConfigWithPassword(projectRef)
 	case proxy:
 		token, err := utils.LoadAccessTokenFS(fsys)
 		if err != nil {
@@ -89,7 +99,7 @@ func ParseDatabaseConfig(flagSet *pflag.FlagSet, fsys afero.Fs) error {
 	return nil
 }
 
-func newDbConfigWithPassword(projectRef string) pgconn.Config {
+func NewDbConfigWithPassword(projectRef string) pgconn.Config {
 	config := getDbConfig(projectRef)
 	config.Password = getPassword(projectRef)
 	return config
@@ -99,15 +109,36 @@ func getPassword(projectRef string) string {
 	if password := viper.GetString("DB_PASSWORD"); len(password) > 0 {
 		return password
 	}
-	if password, err := credentials.Get(projectRef); err == nil {
+	if password, err := credentials.StoreProvider.Get(projectRef); err == nil {
 		return password
 	}
-	return PromptPassword(os.Stdin)
+	resetUrl := fmt.Sprintf("%s/project/%s/settings/database", utils.GetSupabaseDashboardURL(), projectRef)
+	fmt.Fprintln(os.Stderr, "Forgot your password? Reset it from the Dashboard:", utils.Bold(resetUrl))
+	fmt.Fprint(os.Stderr, "Enter your database password: ")
+	return credentials.PromptMasked(os.Stdin)
 }
 
+const PASSWORD_LENGTH = 16
+
 func PromptPassword(stdin *os.File) string {
-	fmt.Fprint(os.Stderr, "Enter your database password: ")
-	return credentials.PromptMasked(stdin)
+	fmt.Fprint(os.Stderr, "Enter your database password (or leave blank to generate one): ")
+	if input := credentials.PromptMasked(stdin); len(input) > 0 {
+		return input
+	}
+	// Generate a password, see ./Settings/Database/DatabaseSettings/ResetDbPassword.tsx#L83
+	var password []byte
+	charset := string(api.AbcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567891)
+	charset = strings.ReplaceAll(charset, ":", "")
+	maxRange := big.NewInt(int64(len(charset)))
+	for i := 0; i < PASSWORD_LENGTH; i++ {
+		random, err := rand.Int(rand.Reader, maxRange)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to randomise password:", err)
+			continue
+		}
+		password = append(password, charset[random.Int64()])
+	}
+	return string(password)
 }
 
 func getDbConfig(projectRef string) pgconn.Config {

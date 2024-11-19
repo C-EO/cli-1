@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/h2non/gock"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/supabase/cli/internal/testing/apitest"
 	"github.com/supabase/cli/internal/utils"
-	"gopkg.in/h2non/gock.v1"
 )
 
 func TestBranchValidation(t *testing.T) {
@@ -75,7 +75,7 @@ func TestBranchCreation(t *testing.T) {
 		// Run test
 		err := createBranch(context.Background(), "test-branch")
 		// Validate api
-		assert.ErrorContains(t, err, "cannot connect to the Docker daemon.")
+		assert.ErrorContains(t, err, "unable to upgrade to tcp, received 404")
 		assert.Empty(t, apitest.ListUnmatchedRequests())
 	})
 }

@@ -20,11 +20,12 @@ import (
 	dockerConfig "github.com/docker/cli/cli/config"
 	dockerFlags "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/cli/streams"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -32,6 +33,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/go-errors/errors"
 	"github.com/spf13/viper"
+	"go.opentelemetry.io/otel"
 )
 
 var Docker = NewDocker()
@@ -42,40 +44,28 @@ func NewDocker() *client.Client {
 	if err != nil {
 		log.Fatalln("Failed to create Docker client:", err)
 	}
+	// Silence otel errors as users don't care about docker metrics
+	// 2024/08/12 23:11:12 1 errors occurred detecting resource:
+	// 	* conflicting Schema URL: https://opentelemetry.io/schemas/1.21.0
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(cause error) {}))
 	if err := cli.Initialize(&dockerFlags.ClientOptions{}); err != nil {
 		log.Fatalln("Failed to initialize Docker client:", err)
 	}
 	return cli.Client().(*client.Client)
 }
 
-func AssertDockerIsRunning(ctx context.Context) error {
-	if _, err := Docker.Ping(ctx); err != nil {
-		if client.IsErrConnectionFailed(err) {
-			CmdSuggestion = suggestDockerInstall
-		}
-		return errors.Errorf("failed to ping docker daemon: %w", err)
-	}
-
-	return nil
-}
-
 const (
+	DinDHost            = "host.docker.internal"
 	CliProjectLabel     = "com.supabase.cli.project"
-	composeProjectLabel = "com.docker.compose.projecta"
+	composeProjectLabel = "com.docker.compose.project"
 )
 
-func DockerNetworkCreateIfNotExists(ctx context.Context, networkId string) error {
-	_, err := Docker.NetworkCreate(
-		ctx,
-		networkId,
-		types.NetworkCreate{
-			CheckDuplicate: true,
-			Labels: map[string]string{
-				CliProjectLabel:     Config.ProjectId,
-				composeProjectLabel: Config.ProjectId,
-			},
-		},
-	)
+func DockerNetworkCreateIfNotExists(ctx context.Context, mode container.NetworkMode, labels map[string]string) error {
+	// Non-user defined networks should already exist
+	if !isUserDefined(mode) {
+		return nil
+	}
+	_, err := Docker.NetworkCreate(ctx, mode.NetworkName(), network.CreateOptions{Labels: labels})
 	// if error is network already exists, no need to propagate to user
 	if errdefs.IsConflict(err) || errors.Is(err, podman.ErrNetworkExists) {
 		return nil
@@ -103,9 +93,10 @@ func WaitAll[T any](containers []T, exec func(container T) error) []error {
 // NoBackupVolume TODO: encapsulate this state in a class
 var NoBackupVolume = false
 
-func DockerRemoveAll(ctx context.Context, w io.Writer) error {
-	args := CliProjectFilter()
-	containers, err := Docker.ContainerList(ctx, types.ContainerListOptions{
+func DockerRemoveAll(ctx context.Context, w io.Writer, projectId string) error {
+	fmt.Fprintln(w, "Stopping containers...")
+	args := CliProjectFilter(projectId)
+	containers, err := Docker.ContainerList(ctx, container.ListOptions{
 		All:     true,
 		Filters: args,
 	})
@@ -119,7 +110,6 @@ func DockerRemoveAll(ctx context.Context, w io.Writer) error {
 			ids = append(ids, c.ID)
 		}
 	}
-	fmt.Fprintln(w, "Stopping containers...")
 	result := WaitAll(ids, func(id string) error {
 		if err := Docker.ContainerStop(ctx, id, container.StopOptions{}); err != nil {
 			return errors.Errorf("failed to stop container: %w", err)
@@ -136,7 +126,13 @@ func DockerRemoveAll(ctx context.Context, w io.Writer) error {
 	}
 	// Remove named volumes
 	if NoBackupVolume {
-		if report, err := Docker.VolumesPrune(ctx, args); err != nil {
+		vargs := args.Clone()
+		if versions.GreaterThanOrEqualTo(Docker.ClientVersion(), "1.42") {
+			// Since docker engine 25.0.3, all flag is required to include named volumes.
+			// https://github.com/docker/cli/blob/master/cli/command/volume/prune.go#L76
+			vargs.Add("all", "true")
+		}
+		if report, err := Docker.VolumesPrune(ctx, vargs); err != nil {
 			return errors.Errorf("failed to prune volumes: %w", err)
 		} else if viper.GetBool("DEBUG") {
 			fmt.Fprintln(os.Stderr, "Pruned volumes:", report.VolumesDeleted)
@@ -151,9 +147,14 @@ func DockerRemoveAll(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-func CliProjectFilter() filters.Args {
+func CliProjectFilter(projectId string) filters.Args {
+	if len(projectId) == 0 {
+		return filters.NewArgs(
+			filters.Arg("label", CliProjectLabel),
+		)
+	}
 	return filters.NewArgs(
-		filters.Arg("label", CliProjectLabel+"="+Config.ProjectId),
+		filters.Arg("label", CliProjectLabel+"="+projectId),
 	)
 }
 
@@ -204,8 +205,8 @@ func GetRegistryImageUrl(imageName string) string {
 	return registry + "/supabase/" + imageName
 }
 
-func DockerImagePull(ctx context.Context, image string, w io.Writer) error {
-	out, err := Docker.ImagePull(ctx, image, types.ImagePullOptions{
+func DockerImagePull(ctx context.Context, imageTag string, w io.Writer) error {
+	out, err := Docker.ImagePull(ctx, imageTag, image.PullOptions{
 		RegistryAuth: GetRegistryAuth(),
 	})
 	if err != nil {
@@ -259,19 +260,21 @@ func DockerStart(ctx context.Context, config container.Config, hostConfig contai
 	// Setup default config
 	config.Image = GetRegistryImageUrl(config.Image)
 	if config.Labels == nil {
-		config.Labels = map[string]string{}
+		config.Labels = make(map[string]string, 2)
 	}
 	config.Labels[CliProjectLabel] = Config.ProjectId
 	config.Labels[composeProjectLabel] = Config.ProjectId
-	if len(hostConfig.NetworkMode) == 0 {
+	// Configure container network
+	hostConfig.ExtraHosts = append(hostConfig.ExtraHosts, extraHosts...)
+	if networkId := viper.GetString("network-id"); len(networkId) > 0 {
+		hostConfig.NetworkMode = container.NetworkMode(networkId)
+	} else if len(hostConfig.NetworkMode) == 0 {
 		hostConfig.NetworkMode = container.NetworkMode(NetId)
 	}
-	// Create network with name
-	if hostConfig.NetworkMode.IsUserDefined() && hostConfig.NetworkMode.UserDefined() != "host" {
-		if err := DockerNetworkCreateIfNotExists(ctx, hostConfig.NetworkMode.NetworkName()); err != nil {
-			return "", err
-		}
+	if err := DockerNetworkCreateIfNotExists(ctx, hostConfig.NetworkMode, config.Labels); err != nil {
+		return "", err
 	}
+	// Configure container volumes
 	var binds, sources []string
 	for _, bind := range hostConfig.Binds {
 		spec, err := loader.ParseVolume(bind)
@@ -287,6 +290,9 @@ func DockerStart(ctx context.Context, config container.Config, hostConfig contai
 	// Skip named volume for BitBucket pipeline
 	if os.Getenv("BITBUCKET_CLONE_DIR") != "" {
 		hostConfig.Binds = binds
+		// Bitbucket doesn't allow for --security-opt option to be set
+		// https://support.atlassian.com/bitbucket-cloud/docs/run-docker-commands-in-bitbucket-pipelines/#Full-list-of-restricted-commands
+		hostConfig.SecurityOpt = nil
 	} else {
 		// Create named volumes with labels
 		for _, name := range sources {
@@ -304,7 +310,7 @@ func DockerStart(ctx context.Context, config container.Config, hostConfig contai
 		return "", errors.Errorf("failed to create docker container: %w", err)
 	}
 	// Run container in background
-	err = Docker.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{})
+	err = Docker.ContainerStart(ctx, resp.ID, container.StartOptions{})
 	if err != nil {
 		if hostPort := parsePortBindError(err); len(hostPort) > 0 {
 			CmdSuggestion = suggestDockerStop(ctx, hostPort)
@@ -324,7 +330,7 @@ func DockerStart(ctx context.Context, config container.Config, hostConfig contai
 }
 
 func DockerRemove(containerId string) {
-	if err := Docker.ContainerRemove(context.Background(), containerId, types.ContainerRemoveOptions{
+	if err := Docker.ContainerRemove(context.Background(), containerId, container.RemoveOptions{
 		RemoveVolumes: true,
 		Force:         true,
 	}); err != nil {
@@ -332,12 +338,19 @@ func DockerRemove(containerId string) {
 	}
 }
 
+type DockerJob struct {
+	Image string
+	Env   []string
+	Cmd   []string
+}
+
+func DockerRunJob(ctx context.Context, job DockerJob, stdout, stderr io.Writer) error {
+	return DockerRunOnceWithStream(ctx, job.Image, job.Env, job.Cmd, stdout, stderr)
+}
+
 // Runs a container image exactly once, returning stdout and throwing error on non-zero exit code.
 func DockerRunOnce(ctx context.Context, image string, env []string, cmd []string) (string, error) {
-	stderr := io.Discard
-	if viper.GetBool("DEBUG") {
-		stderr = os.Stderr
-	}
+	stderr := GetDebugLogger()
 	var out bytes.Buffer
 	err := DockerRunOnceWithStream(ctx, image, env, cmd, &out, stderr)
 	return out.String(), err
@@ -363,9 +376,9 @@ func DockerRunOnceWithConfig(ctx context.Context, config container.Config, hostC
 	return DockerStreamLogs(ctx, container, stdout, stderr)
 }
 
-func DockerStreamLogs(ctx context.Context, container string, stdout, stderr io.Writer) error {
+func DockerStreamLogs(ctx context.Context, containerId string, stdout, stderr io.Writer) error {
 	// Stream logs
-	logs, err := Docker.ContainerLogs(ctx, container, types.ContainerLogsOptions{
+	logs, err := Docker.ContainerLogs(ctx, containerId, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
@@ -378,7 +391,7 @@ func DockerStreamLogs(ctx context.Context, container string, stdout, stderr io.W
 		return errors.Errorf("failed to copy docker logs: %w", err)
 	}
 	// Check exit code
-	resp, err := Docker.ContainerInspect(ctx, container)
+	resp, err := Docker.ContainerInspect(ctx, containerId)
 	if err != nil {
 		return errors.Errorf("failed to inspect docker container: %w", err)
 	}
@@ -388,20 +401,35 @@ func DockerStreamLogs(ctx context.Context, container string, stdout, stderr io.W
 	return nil
 }
 
+func DockerStreamLogsOnce(ctx context.Context, containerId string, stdout, stderr io.Writer) error {
+	logs, err := Docker.ContainerLogs(ctx, containerId, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+	})
+	if err != nil {
+		return errors.Errorf("failed to read docker logs: %w", err)
+	}
+	defer logs.Close()
+	if _, err := stdcopy.StdCopy(stdout, stderr, logs); err != nil {
+		return errors.Errorf("failed to copy docker logs: %w", err)
+	}
+	return nil
+}
+
 // Exec a command once inside a container, returning stdout and throwing error on non-zero exit code.
-func DockerExecOnce(ctx context.Context, container string, env []string, cmd []string) (string, error) {
+func DockerExecOnce(ctx context.Context, containerId string, env []string, cmd []string) (string, error) {
 	stderr := io.Discard
 	if viper.GetBool("DEBUG") {
 		stderr = os.Stderr
 	}
 	var out bytes.Buffer
-	err := DockerExecOnceWithStream(ctx, container, "", env, cmd, &out, stderr)
+	err := DockerExecOnceWithStream(ctx, containerId, "", env, cmd, &out, stderr)
 	return out.String(), err
 }
 
-func DockerExecOnceWithStream(ctx context.Context, container, workdir string, env, cmd []string, stdout, stderr io.Writer) error {
+func DockerExecOnceWithStream(ctx context.Context, containerId, workdir string, env, cmd []string, stdout, stderr io.Writer) error {
 	// Reset shadow database
-	exec, err := Docker.ContainerExecCreate(ctx, container, types.ExecConfig{
+	exec, err := Docker.ContainerExecCreate(ctx, containerId, container.ExecOptions{
 		Env:          env,
 		Cmd:          cmd,
 		WorkingDir:   workdir,
@@ -412,7 +440,7 @@ func DockerExecOnceWithStream(ctx context.Context, container, workdir string, en
 		return errors.Errorf("failed to exec docker create: %w", err)
 	}
 	// Read exec output
-	resp, err := Docker.ContainerExecAttach(ctx, exec.ID, types.ExecStartCheck{})
+	resp, err := Docker.ContainerExecAttach(ctx, exec.ID, container.ExecStartOptions{})
 	if err != nil {
 		return errors.Errorf("failed to exec docker attach: %w", err)
 	}
@@ -443,7 +471,7 @@ func parsePortBindError(err error) string {
 }
 
 func suggestDockerStop(ctx context.Context, hostPort string) string {
-	if containers, err := Docker.ContainerList(ctx, types.ContainerListOptions{}); err == nil {
+	if containers, err := Docker.ContainerList(ctx, container.ListOptions{}); err == nil {
 		for _, c := range containers {
 			for _, p := range c.Ports {
 				if fmt.Sprintf("%s:%d", p.IP, p.PublicPort) == hostPort {
@@ -461,9 +489,4 @@ func suggestDockerStop(ctx context.Context, hostPort string) string {
 		}
 	}
 	return ""
-}
-
-func replaceImageTag(image string, tag string) string {
-	index := strings.IndexByte(image, ':')
-	return image[:index+1] + strings.TrimSpace(tag)
 }
